@@ -1,0 +1,177 @@
+/* ═══════════════════════════════════════════════════════════════
+   SKELETON SCREENS — Shimmer Loading Effect
+   ═══════════════════════════════════════════════════════════════ */
+
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position:  600px 0; }
+}
+
+.skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--border-color) 25%,
+    var(--bg-secondary) 50%,
+    var(--border-color) 75%
+  );
+  background-size: 1200px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* ── Stat card skeleton ────────────────────────────────────────── */
+.skeleton-stat-card {
+  background: var(--bg-card);
+  border-radius: 16px;
+  padding: 22px;
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.skeleton-stat-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── List item skeleton ────────────────────────────────────────── */
+.skeleton-list-item {
+  background: var(--bg-card);
+  border-radius: 14px;
+  padding: 16px 20px;
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.skeleton-list-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skeleton-list-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* ── Chart skeleton ────────────────────────────────────────────── */
+.skeleton-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skeleton-chart-bars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.skeleton-bar-wrap {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.skeleton-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 4px;
+}
+
+/* ── Dashboard layout skeletons ────────────────────────────────── */
+.skeleton-dashboard {
+  padding: 28px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  animation: skFadeIn 0.3s ease;
+}
+
+@keyframes skFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.skeleton-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skeleton-header > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skeleton-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.skeleton-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.skeleton-stats-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.skeleton-charts-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.skeleton-chart-card {
+  background: var(--bg-card);
+  border-radius: 16px;
+  padding: 22px;
+  border: 1px solid var(--border-color);
+}
+
+.skeleton-list-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Hero card skeleton (member dashboard) */
+.skeleton-hero {
+  background: var(--bg-secondary);
+  border-radius: 20px;
+  padding: 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  border: 1px solid var(--border-color);
+}
+
+.skeleton-hero-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 768px) {
+  .skeleton-stats-row { grid-template-columns: repeat(2, 1fr); }
+  .skeleton-charts-row { grid-template-columns: 1fr; }
+  .skeleton-dashboard { padding: 20px; }
+}
