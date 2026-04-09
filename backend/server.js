@@ -61,6 +61,7 @@ app.disable('x-powered-by');
 const allowedOrigins = [
   'http://localhost:3000',
   'http://10.44.75.138:3000',
+  'https://gymmate-app.vercel.app',
   // Add production domain when ready:
   // 'https://yourdomain.com',
   // 'https://www.yourdomain.com',
