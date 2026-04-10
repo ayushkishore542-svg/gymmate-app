@@ -1,0 +1,325 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import QRCode from 'qrcode.react';
+import { 
+  membersAPI, 
+  attendanceAPI, 
+  paymentsAPI, 
+  visitorsAPI,
+  noticesAPI 
+} from '../utils/api';
+import './OwnerDashboard.css';
+
+const OwnerDashboard = ({ user, setUser }) => {
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('overview');
+  const [members, setMembers] = useState([]);
+  const [visitors, setVisitors] = useState([]);
+  const [notices, setNotices] = useState([]);
+  const [stats, setStats] = useState({
+    totalMembers: 0,
+    activeMembers: 0,
+    todayAttendance: 0,
+    monthlyRevenue: 0
+  });
+  const [expiringMembers, setExpiringMembers] = useState([]);
+  const [inactiveMembers, setInactiveMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modal states
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [showAddVisitor, setShowAddVisitor] = useState(false);
+  const [showAddNotice, setShowAddNotice] = useState(false);
+  const [showQRModal, setShowQRModal] = useState(false);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch members
+      const membersRes = await membersAPI.getMembers(user.id);
+      setMembers(membersRes.data.members);
+      
+      const activeMembersCount = membersRes.data.members.filter(
+        m => m.membershipStatus === 'active'
+      ).length;
+
+      // Fetch today's attendance
+      const today = new Date().toISOString().split('T')[0];
+      const attendanceRes = await attendanceAPI.getGymAttendance(user.id, { date: today });
+
+      // Fetch expiring members
+      const expiringRes = await membersAPI.getExpiringMembers(user.id);
+      setExpiringMembers(expiringRes.data.expiringMembers);
+
+      // Fetch inactive members
+      const inactiveRes = await membersAPI.getInactiveMembers(user.id);
+      setInactiveMembers(inactiveRes.data.inactiveMembers);
+
+      // Fetch payment stats
+      const paymentRes = await paymentsAPI.getPaymentStats(user.id, { period: 'month' });
+
+      setStats({
+        totalMembers: membersRes.data.members.length,
+        activeMembers: activeMembersCount,
+        todayAttendance: attendanceRes.data.count,
+        monthlyRevenue: paymentRes.data.totalRevenue
+      });
+
+      // Fetch visitors
+      const visitorsRes = await visitorsAPI.getVisitors(user.id);
+      setVisitors(visitorsRes.data.visitors);
+
+      // Fetch notices
+      const noticesRes = await noticesAPI.getNotices(user.id, { active: true });
+      setNotices(noticesRes.data.notices);
+
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser(null);
+    navigate('/login');
+  };
+
+  const downloadQRCode = () => {
+    const canvas = document.getElementById('gym-qr-code');
+    const pngUrl = canvas
+      .toDataURL('image/png')
+      .replace('image/png', 'image/octet-stream');
+    const downloadLink = document.createElement('a');
+    downloadLink.href = pngUrl;
+    downloadLink.download = `${user.gymName}-QR.png`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
+  const renderSubscriptionStatus = () => {
+    const daysLeft = Math.ceil(
+      (new Date(user.subscriptionEndDate) - new Date()) / (1000 * 60 * 60 * 24)
+    );
+
+    let statusColor = 'green';
+    let statusText = 'Active';
+
+    if (user.subscriptionStatus === 'trial') {
+      statusColor = 'orange';
+      statusText = `Trial - ${daysLeft} days left`;
+    } else if (user.subscriptionStatus === 'expired') {
+      statusColor = 'red';
+      statusText = 'Expired';
+    } else if (daysLeft <= 7) {
+      statusColor = 'orange';
+      statusText = `Expires in ${daysLeft} days`;
+    }
+
+    return (
+      <div className={`subscription-badge ${statusColor}`}>
+        {statusText}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <div className="loader"></div>
+        <p>Loading dashboard...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dashboard-container">
+      {/* Header */}
+      <header className="dashboard-header">
+        <div className="header-left">
+          <h1>💪 {user.gymName}</h1>
+          <p>Owner Dashboard</p>
+        </div>
+        <div className="header-right">
+          {renderSubscriptionStatus()}
+          <button className="logout-btn" onClick={handleLogout}>
+            Logout
+          </button>
+        </div>
+      </header>
+
+      {/* Navigation Tabs */}
+      <div className="dashboard-tabs">
+        <button
+          className={`tab ${activeTab === 'overview' ? 'active' : ''}`}
+          onClick={() => setActiveTab('overview')}
+        >
+          📊 Overview
+        </button>
+        <button
+          className={`tab ${activeTab === 'members' ? 'active' : ''}`}
+          onClick={() => setActiveTab('members')}
+        >
+          👥 Members
+        </button>
+        <button
+          className={`tab ${activeTab === 'visitors' ? 'active' : ''}`}
+          onClick={() => setActiveTab('visitors')}
+        >
+          👋 Visitors
+        </button>
+        <button
+          className={`tab ${activeTab === 'notices' ? 'active' : ''}`}
+          onClick={() => setActiveTab('notices')}
+        >
+          📢 Notices
+        </button>
+        <button
+          className={`tab ${activeTab === 'qr' ? 'active' : ''}`}
+          onClick={() => setActiveTab('qr')}
+        >
+          📱 QR Code
+        </button>
+      </div>
+
+      {/* Overview Tab */}
+      {activeTab === 'overview' && (
+        <div className="tab-content">
+          <div className="stats-grid">
+            <div className="stat-card">
+              <div className="stat-icon">👥</div>
+              <div className="stat-info">
+                <h3>{stats.totalMembers}</h3>
+                <p>Total Members</p>
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon">✅</div>
+              <div className="stat-info">
+                <h3>{stats.activeMembers}</h3>
+                <p>Active Members</p>
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon">📅</div>
+              <div className="stat-info">
+                <h3>{stats.todayAttendance}</h3>
+                <p>Today's Attendance</p>
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon">💰</div>
+              <div className="stat-info">
+                <h3>₹{stats.monthlyRevenue}</h3>
+                <p>Monthly Revenue</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Alerts */}
+          {expiringMembers.length > 0 && (
+            <div className="alert-card warning">
+              <h3>⚠️ Expiring Memberships ({expiringMembers.length})</h3>
+              <ul>
+                {expiringMembers.slice(0, 5).map(member => (
+                  <li key={member._id}>
+                    {member.name} - Expires {new Date(member.membershipEndDate).toLocaleDateString()}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {inactiveMembers.length > 0 && (
+            <div className="alert-card info">
+              <h3>📞 Inactive Members ({inactiveMembers.length})</h3>
+              <p>Members who haven't attended in 3+ days</p>
+              <ul>
+                {inactiveMembers.slice(0, 5).map(member => (
+                  <li key={member._id}>
+                    {member.name} - Last seen: {member.lastAttendance 
+                      ? new Date(member.lastAttendance).toLocaleDateString()
+                      : 'Never'}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Referral Info */}
+          <div className="referral-card">
+            <h3>🎁 Your Referral Code</h3>
+            <div className="referral-code">{user.referralCode}</div>
+            <p>Share this code to earn ₹200 per referral!</p>
+            <p className="earnings">Total Earnings: ₹{user.referralEarnings || 0}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Members Tab */}
+      {activeTab === 'members' && (
+        <div className="tab-content">
+          <div className="content-header">
+            <h2>Members List</h2>
+            <button className="add-btn" onClick={() => setShowAddMember(true)}>
+              + Add Member
+            </button>
+          </div>
+          <div className="members-list">
+            {members.map(member => (
+              <div key={member._id} className="member-card">
+                <div className="member-info">
+                  <h3>{member.name}</h3>
+                  <p>{member.email} | {member.phone}</p>
+                  <span className={`status-badge ${member.membershipStatus}`}>
+                    {member.membershipStatus}
+                  </span>
+                </div>
+                <div className="member-actions">
+                  <p className="expiry-date">
+                    Expires: {new Date(member.membershipEndDate).toLocaleDateString()}
+                  </p>
+                  <button className="action-btn">View Details</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Tab */}
+      {activeTab === 'qr' && (
+        <div className="tab-content qr-content">
+          <h2>Gym QR Code</h2>
+          <p>Members scan this code to mark attendance</p>
+          <div className="qr-display">
+            <QRCode
+              id="gym-qr-code"
+              value={JSON.stringify({
+                gymId: user.id,
+                gymName: user.gymName,
+                type: 'attendance'
+              })}
+              size={300}
+              level="H"
+              includeMargin={true}
+            />
+          </div>
+          <button className="download-btn" onClick={downloadQRCode}>
+            Download QR Code
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default OwnerDashboard;

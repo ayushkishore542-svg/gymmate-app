@@ -1,0 +1,180 @@
+/* ═══════════════════════════════════════════════════════════════
+   GLOBAL DESIGN TOKENS & BASE STYLES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Theme variables ──────────────────────────────────────────── */
+:root {
+  /* Colors — Light */
+  --bg-primary:       #f5f6f8;
+  --bg-secondary:     #eef0f3;
+  --bg-card:          #ffffff;
+  --accent:           #00bfa5;
+  --accent-secondary: #26c6da;
+  --text-primary:     #212121;
+  --text-secondary:   #757575;
+  --border-color:     #e0e0e0;
+  --shadow-sm:        rgba(0, 0, 0, 0.05);
+  --shadow-md:        rgba(0, 0, 0, 0.10);
+  --shadow-lg:        rgba(0, 0, 0, 0.30);
+  --accent-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--accent-secondary) 100%);
+
+  /* Spacing — strict 8px grid */
+  --sp-1: 8px;
+  --sp-2: 16px;
+  --sp-3: 24px;
+  --sp-4: 32px;
+  --sp-5: 40px;
+  --sp-6: 48px;
+
+  /* Typography scale */
+  --font-h1:   32px;
+  --font-h2:   24px;
+  --font-h3:   20px;
+  --font-body: 16px;
+  --font-sm:   14px;
+  --font-xs:   12px;
+
+  /* Border radii */
+  --r-sm:   8px;
+  --r-md:   12px;
+  --r-lg:   16px;
+  --r-xl:   20px;
+  --r-full: 9999px;
+
+  /* Minimum touch target (WCAG 2.5.5) */
+  --touch: 44px;
+}
+
+/* ── Dark theme ───────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-primary:       #0f0f0f;
+  --bg-secondary:     #1a1a1a;
+  --bg-card:          #242424;
+  --accent:           #00ff88;
+  --accent-secondary: #00d97e;
+  --text-primary:     #ffffff;
+  --text-secondary:   #a0a0a0;
+  --border-color:     #2e2e2e;
+  --shadow-sm:        rgba(0, 0, 0, 0.20);
+  --shadow-md:        rgba(0, 0, 0, 0.35);
+  --shadow-lg:        rgba(0, 0, 0, 0.50);
+  --accent-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--accent-secondary) 100%);
+}
+
+/* ── Reset ────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Global theme transition (300ms) ─────────────────────────── */
+*,
+*::before,
+*::after {
+  transition:
+    background-color 0.3s ease,
+    color            0.3s ease,
+    border-color     0.3s ease,
+    box-shadow       0.3s ease;
+}
+
+/* ── Reduced motion ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:        0.01ms !important;
+    animation-iteration-count: 1      !important;
+    transition-duration:       0.01ms !important;
+  }
+  html { scroll-behavior: auto !important; }
+}
+
+/* ── Smooth scroll ────────────────────────────────────────────── */
+html { scroll-behavior: smooth; }
+
+/* ── Custom scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar             { width: 6px; height: 6px; }
+::-webkit-scrollbar-track       { background: transparent; }
+::-webkit-scrollbar-thumb       { background: var(--border-color); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* ── Global focus ring (accessibility) ───────────────────────── */
+:focus-visible {
+  outline: 2.5px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ── Base ─────────────────────────────────────────────────────── */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-body);
+  line-height: 1.6;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+img, video { max-width: 100%; height: auto; display: block; }
+button     { font-family: inherit; cursor: pointer; }
+a          { color: var(--accent); }
+
+/* ── Typography hierarchy ─────────────────────────────────────── */
+h1 { font-size: var(--font-h1); font-weight: 700; line-height: 1.2; }
+h2 { font-size: var(--font-h2); font-weight: 700; line-height: 1.3; }
+h3 { font-size: var(--font-h3); font-weight: 600; line-height: 1.4; }
+p  { line-height: 1.6; }
+
+/* ── App loading screen ───────────────────────────────────────── */
+.loading-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  gap: var(--sp-2);
+}
+
+.loading-screen h2 {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.loader {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid var(--border-color);
+  border-top-color: var(--accent);
+  animation: _globalSpin 0.8s linear infinite;
+}
+
+@keyframes _globalSpin { to { transform: rotate(360deg); } }
+
+/* ── Screen-reader-only utility ───────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
