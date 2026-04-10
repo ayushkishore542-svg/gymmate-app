@@ -96,16 +96,23 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const authLimiter = rateLimit({
+const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,                    // 5 attempts per window
+  max: 10,                   // 10 attempts per window
   message: 'Too many login attempts, try again later.',
   skipSuccessfulRequests: true,
 });
 
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 30,                   // 30 registrations per hour per IP
+  message: 'Too many registration attempts, try again later.',
+  skipSuccessfulRequests: true,
+});
+
 app.use('/api/', apiLimiter);
-app.use('/api/auth/login',    authLimiter);
-app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/login',    loginLimiter);
+app.use('/api/auth/register', registerLimiter);
 
 // Routes
 app.use('/api/auth', authRoutes);
