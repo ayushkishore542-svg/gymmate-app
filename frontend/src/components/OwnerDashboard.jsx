@@ -49,7 +49,7 @@ const OwnerDashboard = ({ user, setUser }) => {
 
   const [newMember, setNewMember] = useState({
     name: '', email: '', phone: '', password: '', loginId: '',
-    membershipFee: '', membershipDuration: '1month',
+    membershipFee: '', membershipPlan: '1month',
     membershipStartDate: new Date().toISOString().split('T')[0]
   });
   const [newVisitor, setNewVisitor] = useState({ name: '', phone: '', purpose: '' });
@@ -173,9 +173,15 @@ const OwnerDashboard = ({ user, setUser }) => {
     e.preventDefault();
     setFormLoading(true);
     try {
-      await authAPI.registerMember({ ...newMember, gymOwnerId: user.id });
+      const planToMonths = { '1month': 1, '3months': 3, '6months': 6, '1year': 12 };
+      const { membershipPlan, ...memberFields } = newMember;
+      await authAPI.registerMember({
+        ...memberFields,
+        membershipDuration: planToMonths[membershipPlan] || 1,
+        gymOwnerId: user.id,
+      });
       setShowAddMember(false);
-      setNewMember({ name: '', email: '', phone: '', password: '', loginId: '', membershipFee: '', membershipDuration: '1month', membershipStartDate: new Date().toISOString().split('T')[0] });
+      setNewMember({ name: '', email: '', phone: '', password: '', loginId: '', membershipFee: '', membershipPlan: '1month', membershipStartDate: new Date().toISOString().split('T')[0] });
       toast.success(`Member "${newMember.name}" added successfully!`);
       fetchDashboardData();
     } catch (error) {
@@ -601,7 +607,7 @@ const OwnerDashboard = ({ user, setUser }) => {
               <div className="form-group"><label>Password</label><input type="password" placeholder="Set a password" value={newMember.password} onChange={e => setNewMember({ ...newMember, password: e.target.value })} required /></div>
               <div className="form-group">
                 <label>Membership Plan</label>
-                <select value={newMember.membershipPlan} onChange={e => setNewMember({ ...newMember, membershipDuration: e.target.value })}>
+                <select value={newMember.membershipPlan} onChange={e => setNewMember({ ...newMember, membershipPlan: e.target.value })}>
                   <option value="1month">1 Month</option>
                   <option value="3months">3 Months</option>
                   <option value="6months">6 Months</option>

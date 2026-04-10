@@ -129,7 +129,8 @@ router.post('/register/member', [
       loginId,
       gymOwnerId,
       membershipFee,
-      membershipDuration // in months
+      membershipDuration, // in months
+      membershipStartDate: membershipStartDateInput
     } = req.body;
 
     // Validate loginId
@@ -152,13 +153,16 @@ router.post('/register/member', [
       return res.status(400).json({ message: 'Invalid gym owner' });
     }
 
-    // Check if member already exists in this gym
-    const existingMember = await User.findOne({
-      $or: [{ email }, { phone }],
-      gymOwnerId: gymOwnerId
-    });
+    // phone is globally unique in the schema — check across all users first
+    const existingPhone = await User.findOne({ phone });
+    if (existingPhone) {
+      return res.status(400).json({ message: 'Phone number is already registered' });
+    }
+
+    // Check if a member with the same email already exists in this gym
+    const existingMember = await User.findOne({ email, gymOwnerId });
     if (existingMember) {
-      return res.status(400).json({ message: 'Member already exists' });
+      return res.status(400).json({ message: 'A member with this email already exists in your gym' });
     }
 
     // Generate unique referral code
@@ -171,7 +175,7 @@ router.post('/register/member', [
     }
 
     // Calculate membership end date
-    const membershipStartDate = new Date();
+    const membershipStartDate = membershipStartDateInput ? new Date(membershipStartDateInput) : new Date();
     const membershipEndDate = new Date(membershipStartDate);
     membershipEndDate.setMonth(membershipEndDate.getMonth() + (membershipDuration || 1));
 
@@ -217,6 +221,15 @@ router.post('/register/member', [
 
   } catch (error) {
     console.error('Register member error:', error);
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0];
+      const messages = {
+        phone: 'Phone number is already registered',
+        loginId: 'Login ID is already taken',
+        email: 'Email is already registered',
+      };
+      return res.status(400).json({ message: messages[field] || 'Duplicate entry — please check your details' });
+    }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
