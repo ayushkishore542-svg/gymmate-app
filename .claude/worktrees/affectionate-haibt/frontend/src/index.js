@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
+import { register as registerSW } from './serviceWorkerRegistration';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
@@ -9,3 +10,12 @@ root.render(
     <App />
   </React.StrictMode>
 );
+
+registerSW({
+  onUpdate: (registration) => {
+    // New version available — send SKIP_WAITING so it activates immediately
+    if (registration && registration.waiting) {
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+  },
+});

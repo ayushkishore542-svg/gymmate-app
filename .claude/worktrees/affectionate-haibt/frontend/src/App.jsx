@@ -6,6 +6,7 @@ import MemberDashboard from './components/MemberDashboard';
 import CalorieTrackerDashboard from './components/CalorieTrackerDashboard';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
+import InstallPrompt from './components/InstallPrompt';
 import './App.css';
 import './animations/animations.css';
 
@@ -96,6 +97,7 @@ function App() {
         </Routes>
       </div>
     </Router>
+    <InstallPrompt />
     </ToastProvider>
     </ThemeProvider>
   );
