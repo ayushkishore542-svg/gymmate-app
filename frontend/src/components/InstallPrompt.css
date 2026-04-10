@@ -1,0 +1,111 @@
+.install-prompt {
+  position: fixed;
+  bottom: 80px; /* above mobile nav bar */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  background: #ffffff;
+  border: 1px solid rgba(0, 191, 165, 0.3);
+  border-radius: 16px;
+  padding: 14px 18px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  max-width: 360px;
+  width: calc(100vw - 32px);
+
+  animation: prompt-slide-up 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes prompt-slide-up {
+  from { opacity: 0; transform: translateX(-50%) translateY(24px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.install-prompt__icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.install-prompt__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.install-prompt__title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #212121;
+  margin: 0 0 2px;
+}
+
+.install-prompt__desc {
+  font-size: 0.8rem;
+  color: #616161;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.install-prompt__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.install-prompt__btn {
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 8px 14px;
+  transition: opacity 0.15s;
+}
+
+.install-prompt__btn:hover {
+  opacity: 0.85;
+}
+
+.install-prompt__btn--primary {
+  background: #00BFA5;
+  color: #ffffff;
+}
+
+.install-prompt__btn--dismiss {
+  background: transparent;
+  color: #9e9e9e;
+  padding: 8px;
+  font-size: 1rem;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .install-prompt {
+    background: #1e1e1e;
+    border-color: rgba(0, 191, 165, 0.4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+  .install-prompt__title { color: #f5f5f5; }
+  .install-prompt__desc  { color: #bdbdbd; }
+  .install-prompt__btn--dismiss { color: #757575; }
+}
+
+/* On desktop, show near bottom-right instead */
+@media (min-width: 641px) {
+  .install-prompt {
+    bottom: 24px;
+    left: auto;
+    right: 24px;
+    transform: none;
+    animation: prompt-slide-up-right 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  @keyframes prompt-slide-up-right {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+}
