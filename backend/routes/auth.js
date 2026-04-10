@@ -129,9 +129,17 @@ router.post('/register/member', [
       loginId,
       gymOwnerId,
       membershipFee,
-      membershipDuration, // in months
+      membershipDuration,
+      membershipPlan,
       membershipStartDate: membershipStartDateInput
     } = req.body;
+
+    // Normalise duration: accept a number, a plan string ('1month','3months','6months','1year'),
+    // or fall back to 1. This makes the backend tolerant of both old and new frontend payloads.
+    const planToMonths = { '1month': 1, '3months': 3, '6months': 6, '1year': 12 };
+    const durationMonths = Number.isFinite(Number(membershipDuration))
+      ? Number(membershipDuration)
+      : planToMonths[membershipPlan] || planToMonths[membershipDuration] || 1;
 
     // Validate loginId
     if (!loginId) {
@@ -177,7 +185,7 @@ router.post('/register/member', [
     // Calculate membership end date
     const membershipStartDate = membershipStartDateInput ? new Date(membershipStartDateInput) : new Date();
     const membershipEndDate = new Date(membershipStartDate);
-    membershipEndDate.setMonth(membershipEndDate.getMonth() + (membershipDuration || 1));
+    membershipEndDate.setMonth(membershipEndDate.getMonth() + durationMonths);
 
     // Create member
     const member = new User({
