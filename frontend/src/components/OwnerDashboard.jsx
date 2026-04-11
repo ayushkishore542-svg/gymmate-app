@@ -604,7 +604,7 @@ const OwnerDashboard = ({ user, setUser }) => {
               <div className="form-group"><label>Email</label><input type="email" placeholder="Enter email address" value={newMember.email} onChange={e => setNewMember({ ...newMember, email: e.target.value })} required /></div>
               <div className="form-group"><label>Phone</label><input type="tel" placeholder="Enter phone number" value={newMember.phone} onChange={e => setNewMember({ ...newMember, phone: e.target.value })} required /></div>
               <div className="form-group"><label>Login ID</label><input type="text" placeholder="Unique ID (min 4 chars, alphanumeric)" value={newMember.loginId} onChange={e => setNewMember({ ...newMember, loginId: e.target.value })} pattern="[a-zA-Z0-9]{4,}" title="Alphanumeric only, minimum 4 characters" required /></div>
-              <div className="form-group"><label>Password</label><input type="password" placeholder="Set a password" value={newMember.password} onChange={e => setNewMember({ ...newMember, password: e.target.value })} required /></div>
+              <div className="form-group"><label>Password</label><input type="password" placeholder="Set a password (min 6 characters)" value={newMember.password} onChange={e => setNewMember({ ...newMember, password: e.target.value })} minLength={6} title="Password must be at least 6 characters" required /></div>
               <div className="form-group">
                 <label>Membership Plan</label>
                 <select value={newMember.membershipPlan} onChange={e => setNewMember({ ...newMember, membershipPlan: e.target.value })}>
