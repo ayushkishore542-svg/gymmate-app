@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { calorieAPI } from '../utils/api';
+import { useRazorpay } from '../hooks/useRazorpay';
 import StartTrialModal from './StartTrialModal';
 import './CalorieTracker.css';
 
@@ -11,16 +12,17 @@ import './CalorieTracker.css';
  */
 export default function SubscriptionCard() {
   const navigate = useNavigate();
-  const [status, setStatus]       = useState(null);   // subscription status object
+  const [status, setStatus]       = useState(null);
   const [loading, setLoading]     = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [payError, setPayError]   = useState('');
+  const [payLoading, setPayLoading] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
       const { data } = await calorieAPI.getStatus();
       setStatus(data);
     } catch {
-      // 403 means not subscribed — the error response has an `action` field
       setStatus(null);
     } finally {
       setLoading(false);
@@ -28,6 +30,24 @@ export default function SubscriptionCard() {
   }, []);
 
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  const { openCheckout } = useRazorpay({
+    onSuccess: () => {
+      setPayLoading(false);
+      setPayError('');
+      fetchStatus(); // refresh card
+    },
+    onError: (msg) => {
+      setPayLoading(false);
+      setPayError(msg);
+    },
+  });
+
+  const handlePay = () => {
+    setPayError('');
+    setPayLoading(true);
+    openCheckout();
+  };
 
   const handleTrialStarted = () => { fetchStatus(); };
 
@@ -72,7 +92,7 @@ export default function SubscriptionCard() {
 
   // ── Trial active ─────────────────────────────────────────────────────────
   if (status.status === 'trial') {
-    const days = status.days_remaining ?? 0;
+    const days   = status.days_remaining ?? 0;
     const urgent = days <= 2;
     return (
       <div className="ct-sub-card">
@@ -91,13 +111,17 @@ export default function SubscriptionCard() {
           Open Calorie Tracker →
         </button>
         {urgent && (
-          <button
-            className="ct-sub-btn secondary"
-            style={{ marginTop: 8 }}
-            onClick={() => alert('Razorpay integration coming soon!')}
-          >
-            Subscribe — ₹99/month
-          </button>
+          <>
+            {payError && <p style={{ color: 'red', fontSize: 12, marginTop: 6 }}>{payError}</p>}
+            <button
+              className="ct-sub-btn secondary"
+              style={{ marginTop: 8 }}
+              onClick={handlePay}
+              disabled={payLoading}
+            >
+              {payLoading ? 'Opening payment…' : 'Subscribe — ₹99/month'}
+            </button>
+          </>
         )}
       </div>
     );
@@ -127,11 +151,13 @@ export default function SubscriptionCard() {
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '8px 0 12px' }}>
           Your subscription has expired. Renew to continue tracking.
         </p>
+        {payError && <p style={{ color: 'red', fontSize: 12, marginBottom: 6 }}>{payError}</p>}
         <button
           className="ct-sub-btn primary"
-          onClick={() => alert('Razorpay integration coming soon!')}
+          onClick={handlePay}
+          disabled={payLoading}
         >
-          Renew — ₹99/month
+          {payLoading ? 'Opening payment…' : 'Renew — ₹99/month'}
         </button>
       </div>
     );

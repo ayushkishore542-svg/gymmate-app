@@ -94,10 +94,13 @@ export const noticesAPI = {
 // ── Calorie Tracker API ───────────────────────────────────────────────────
 export const calorieAPI = {
   // Subscription
-  startTrial:  ()     => api.post('/calorie/subscription/start-trial'),
-  getStatus:   ()     => api.get('/calorie/subscription/status'),
-  subscribe:   (data) => api.post('/calorie/subscription/subscribe', data),
-  cancel:      ()     => api.post('/calorie/subscription/cancel'),
+  startTrial:    ()     => api.post('/calorie/subscription/start-trial'),
+  getStatus:     ()     => api.get('/calorie/subscription/status'),
+  subscribe:     (data) => api.post('/calorie/subscription/subscribe', data),
+  cancel:        ()     => api.post('/calorie/subscription/cancel'),
+  // Razorpay
+  createOrder:   ()     => api.post('/calorie/subscription/create-order'),
+  verifyPayment: (data) => api.post('/calorie/subscription/verify-payment', data),
 
   // Foods
   searchFoods: (q, limit) => api.get('/calorie/foods/search', { params: { q, limit } }),
