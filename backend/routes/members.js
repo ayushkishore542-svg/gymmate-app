@@ -145,6 +145,37 @@ router.post('/:memberId/membership', authMiddleware, async (req, res) => {
   }
 });
 
+// Change member password
+router.put('/:memberId/password', authMiddleware, async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+
+    const member = await User.findById(memberId);
+    if (!member) {
+      return res.status(404).json({ message: 'Member not found' });
+    }
+
+    // Verify current password
+    const isValid = await member.comparePassword(currentPassword);
+    if (!isValid) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+
+    member.password = newPassword;
+    await member.save();
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // Delete member
 router.delete('/:memberId', authMiddleware, async (req, res) => {
   try {

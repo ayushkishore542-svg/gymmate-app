@@ -8,7 +8,7 @@ import {
 import {
   FiUsers, FiCheckCircle, FiCalendar, FiDollarSign,
   FiHome, FiEye, FiBell, FiGrid, FiLogOut,
-  FiTrendingUp, FiBarChart2, FiUserPlus
+  FiTrendingUp, FiBarChart2, FiUserPlus, FiCamera, FiX
 } from 'react-icons/fi';
 import {
   authAPI,
@@ -50,8 +50,10 @@ const OwnerDashboard = ({ user, setUser }) => {
   const [newMember, setNewMember] = useState({
     name: '', email: '', phone: '', password: '', loginId: '',
     membershipFee: '', membershipPlan: '1month',
-    membershipStartDate: new Date().toISOString().split('T')[0]
+    membershipStartDate: new Date().toISOString().split('T')[0],
+    profilePhoto: null
   });
+  const [photoPreview, setPhotoPreview] = useState(null);
   const [newVisitor, setNewVisitor] = useState({ name: '', phone: '', purpose: '' });
   const [newNotice, setNewNotice] = useState({ title: '', content: '' });
 
@@ -169,6 +171,30 @@ const OwnerDashboard = ({ user, setUser }) => {
   }, []);
 
   // ── Handlers ───────────────────────────────────────────────────
+  const handlePhotoChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/jpg'].includes(file.type)) {
+      toast.error('Only JPG and PNG images are allowed');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Photo must be smaller than 2 MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setPhotoPreview(reader.result);
+      setNewMember(prev => ({ ...prev, profilePhoto: reader.result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = () => {
+    setPhotoPreview(null);
+    setNewMember(prev => ({ ...prev, profilePhoto: null }));
+  };
+
   const handleAddMember = async (e) => {
     e.preventDefault();
     setFormLoading(true);
@@ -181,7 +207,8 @@ const OwnerDashboard = ({ user, setUser }) => {
         gymOwnerId: user.id,
       });
       setShowAddMember(false);
-      setNewMember({ name: '', email: '', phone: '', password: '', loginId: '', membershipFee: '', membershipPlan: '1month', membershipStartDate: new Date().toISOString().split('T')[0] });
+      setPhotoPreview(null);
+      setNewMember({ name: '', email: '', phone: '', password: '', loginId: '', membershipFee: '', membershipPlan: '1month', membershipStartDate: new Date().toISOString().split('T')[0], profilePhoto: null });
       toast.success(`Member "${newMember.name}" added successfully!`);
       fetchDashboardData();
     } catch (error) {
@@ -489,10 +516,13 @@ const OwnerDashboard = ({ user, setUser }) => {
                 {members.length === 0 && <p className="od-empty">No members yet. Add your first member!</p>}
                 {members.map(member => (
                   <div key={member._id} className="od-list-item">
-                    <div className="od-list-avatar">{member.name.charAt(0).toUpperCase()}</div>
+                    {member.profilePhoto
+                      ? <img src={member.profilePhoto} alt={member.name} className="od-list-avatar-img" />
+                      : <div className="od-list-avatar">{member.name.charAt(0).toUpperCase()}</div>
+                    }
                     <div className="od-list-info">
                       <h3>{member.name}</h3>
-                      <p>{member.email} · {member.phone}</p>
+                      <p>{member.email || member.phone} · {member.phone}</p>
                     </div>
                     <div className="od-list-meta">
                       <span className={`od-badge od-badge-${member.membershipStatus}`}>{member.membershipStatus}</span>
@@ -600,8 +630,35 @@ const OwnerDashboard = ({ user, setUser }) => {
               <button className="close-btn" onClick={() => setShowAddMember(false)}>×</button>
             </div>
             <form className="modal-form" onSubmit={handleAddMember}>
+              {/* Photo upload */}
+              <div className="form-group">
+                <label>Profile Photo <span className="optional-label">(optional)</span></label>
+                <div className="photo-upload-area">
+                  {photoPreview ? (
+                    <div className="photo-preview-wrap">
+                      <img src={photoPreview} alt="Preview" className="photo-preview-img" />
+                      <button type="button" className="photo-remove-btn" onClick={handleRemovePhoto}>
+                        <FiX size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="photo-upload-label" htmlFor="member-photo-input">
+                      <FiCamera size={24} />
+                      <span>Upload Photo</span>
+                      <span className="photo-hint">JPG or PNG, max 2MB</span>
+                    </label>
+                  )}
+                  <input
+                    id="member-photo-input"
+                    type="file"
+                    accept="image/jpeg,image/png,image/jpg"
+                    onChange={handlePhotoChange}
+                    style={{ display: 'none' }}
+                  />
+                </div>
+              </div>
               <div className="form-group"><label>Full Name</label><input type="text" placeholder="Enter member name" value={newMember.name} onChange={e => setNewMember({ ...newMember, name: e.target.value })} required /></div>
-              <div className="form-group"><label>Email</label><input type="email" placeholder="Enter email address" value={newMember.email} onChange={e => setNewMember({ ...newMember, email: e.target.value })} required /></div>
+              <div className="form-group"><label>Email <span className="optional-label">(optional)</span></label><input type="email" placeholder="Enter email address (optional)" value={newMember.email} onChange={e => setNewMember({ ...newMember, email: e.target.value })} /></div>
               <div className="form-group"><label>Phone</label><input type="tel" placeholder="Enter phone number" value={newMember.phone} onChange={e => setNewMember({ ...newMember, phone: e.target.value })} required /></div>
               <div className="form-group"><label>Login ID</label><input type="text" placeholder="Unique ID (min 4 chars, alphanumeric)" value={newMember.loginId} onChange={e => setNewMember({ ...newMember, loginId: e.target.value })} pattern="[a-zA-Z0-9]{4,}" title="Alphanumeric only, minimum 4 characters" required /></div>
               <div className="form-group"><label>Password</label><input type="password" placeholder="Set a password (min 6 characters)" value={newMember.password} onChange={e => setNewMember({ ...newMember, password: e.target.value })} minLength={6} title="Password must be at least 6 characters" required /></div>

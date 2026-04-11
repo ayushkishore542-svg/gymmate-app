@@ -10,7 +10,7 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true,
+    required: function() { return this.role === 'owner'; }, // optional for members
     lowercase: true,
     trim: true
   },

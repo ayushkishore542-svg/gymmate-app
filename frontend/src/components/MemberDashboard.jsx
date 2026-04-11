@@ -9,7 +9,7 @@ import {
   FiLogOut, FiUser, FiBell, FiActivity, FiHome,
   FiZap
 } from 'react-icons/fi';
-import { attendanceAPI, noticesAPI } from '../utils/api';
+import { attendanceAPI, noticesAPI, membersAPI } from '../utils/api';
 import AttendanceScanner from './AttendanceScanner';
 import SubscriptionCard from './SubscriptionCard';
 import { useTheme } from '../context/ThemeContext';
@@ -29,6 +29,8 @@ const MemberDashboard = ({ user, setUser }) => {
   const [notices, setNotices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
+  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
+  const [pwLoading, setPwLoading] = useState(false);
 
   // Chart colours
   const chartColor    = theme === 'dark' ? '#00ff88' : '#00bfa5';
@@ -71,6 +73,31 @@ const MemberDashboard = ({ user, setUser }) => {
     localStorage.removeItem('user');
     setUser(null);
     navigate('/login');
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (pwForm.next !== pwForm.confirm) {
+      toast.error('New passwords do not match');
+      return;
+    }
+    if (pwForm.next.length < 6) {
+      toast.error('New password must be at least 6 characters');
+      return;
+    }
+    setPwLoading(true);
+    try {
+      await membersAPI.changePassword(user.id, {
+        currentPassword: pwForm.current,
+        newPassword: pwForm.next
+      });
+      toast.success('Password updated successfully!');
+      setPwForm({ current: '', next: '', confirm: '' });
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update password');
+    } finally {
+      setPwLoading(false);
+    }
   };
 
   const getDaysUntilExpiry = () =>
@@ -445,12 +472,15 @@ const MemberDashboard = ({ user, setUser }) => {
           <div>
             <h2 className="md-page-title">Profile</h2>
             <div className="md-profile-card">
-              <div className="md-profile-avatar">{user.name.charAt(0).toUpperCase()}</div>
+              {user.profilePhoto
+                ? <img src={user.profilePhoto} alt={user.name} className="md-profile-avatar-img" />
+                : <div className="md-profile-avatar">{user.name.charAt(0).toUpperCase()}</div>
+              }
               <h2 className="md-profile-name">{user.name}</h2>
-              <p className="md-profile-gym">{user.gymOwner.gymName}</p>
+              <p className="md-profile-gym">{user.gymOwner?.gymName}</p>
               <div className="md-profile-rows">
                 {[
-                  { label: 'Email',         value: user.email },
+                  { label: 'Email',         value: user.email || '—' },
                   { label: 'Phone',         value: user.phone },
                   { label: 'Login ID',      value: user.loginId || '—' },
                   { label: 'Member Since',  value: new Date(user.createdAt || user.membershipStartDate).toLocaleDateString() },
@@ -462,6 +492,48 @@ const MemberDashboard = ({ user, setUser }) => {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* Change Password */}
+            <div className="md-change-pw-card">
+              <h3 className="md-change-pw-title">Change Password</h3>
+              <form className="md-change-pw-form" onSubmit={handleChangePassword}>
+                <div className="md-pw-field">
+                  <label>Current Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter current password"
+                    value={pwForm.current}
+                    onChange={e => setPwForm(prev => ({ ...prev, current: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="md-pw-field">
+                  <label>New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter new password (min 6 chars)"
+                    value={pwForm.next}
+                    onChange={e => setPwForm(prev => ({ ...prev, next: e.target.value }))}
+                    minLength={6}
+                    required
+                  />
+                </div>
+                <div className="md-pw-field">
+                  <label>Confirm New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Re-enter new password"
+                    value={pwForm.confirm}
+                    onChange={e => setPwForm(prev => ({ ...prev, confirm: e.target.value }))}
+                    minLength={6}
+                    required
+                  />
+                </div>
+                <button type="submit" className="md-change-pw-btn" disabled={pwLoading}>
+                  {pwLoading ? 'Updating…' : 'Update Password'}
+                </button>
+              </form>
             </div>
           </div>
         )}

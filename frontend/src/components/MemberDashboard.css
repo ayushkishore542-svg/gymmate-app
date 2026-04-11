@@ -832,3 +832,82 @@
   .md-header-right { gap: 6px; }
   .md-status-badge { display: none; }
 }
+
+/* ── Profile photo image ──────────────────────────────────────── */
+.md-profile-avatar-img {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--accent-color);
+  margin-bottom: 16px;
+}
+
+/* ── Change password card ─────────────────────────────────────── */
+.md-change-pw-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 24px;
+  margin-top: 20px;
+}
+
+.md-change-pw-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 20px 0;
+}
+
+.md-change-pw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.md-pw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.md-pw-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.md-pw-field input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.md-pw-field input:focus {
+  border-color: var(--accent-color);
+}
+
+.md-change-pw-btn {
+  margin-top: 6px;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent-gradient);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.md-change-pw-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

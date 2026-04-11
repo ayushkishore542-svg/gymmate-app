@@ -53,7 +53,8 @@ export const membersAPI = {
   updateMembership: (memberId, data) => api.post(`/members/${memberId}/membership`, data),
   deleteMember: (memberId) => api.delete(`/members/${memberId}`),
   getExpiringMembers: (ownerId) => api.get(`/members/gym/${ownerId}/expiring`),
-  getInactiveMembers: (ownerId) => api.get(`/members/gym/${ownerId}/inactive`)
+  getInactiveMembers: (ownerId) => api.get(`/members/gym/${ownerId}/inactive`),
+  changePassword: (memberId, data) => api.put(`/members/${memberId}/password`, data)
 };
 
 // Attendance API

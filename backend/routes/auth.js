@@ -113,7 +113,7 @@ router.post('/register/owner', [
 // Register Member (by gym owner)
 router.post('/register/member', [
   body('name').notEmpty().trim().escape(),
-  body('email').isEmail().normalizeEmail().trim(),
+  body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail().trim(),
   body('password').isLength({ min: 6 }).trim(),
   body('loginId').notEmpty().trim(),
   body('gymOwnerId').notEmpty().trim(),
@@ -131,7 +131,8 @@ router.post('/register/member', [
       membershipFee,
       membershipDuration,
       membershipPlan,
-      membershipStartDate: membershipStartDateInput
+      membershipStartDate: membershipStartDateInput,
+      profilePhoto
     } = req.body;
 
     // Normalise duration: accept a number, a plan string ('1month','3months','6months','1year'),
@@ -167,10 +168,12 @@ router.post('/register/member', [
       return res.status(400).json({ message: 'Phone number is already registered' });
     }
 
-    // Check if a member with the same email already exists in this gym
-    const existingMember = await User.findOne({ email, gymOwnerId });
-    if (existingMember) {
-      return res.status(400).json({ message: 'A member with this email already exists in your gym' });
+    // Check if a member with the same email already exists in this gym (only if email provided)
+    if (email) {
+      const existingMember = await User.findOne({ email, gymOwnerId });
+      if (existingMember) {
+        return res.status(400).json({ message: 'A member with this email already exists in your gym' });
+      }
     }
 
     // Generate unique referral code
@@ -190,7 +193,7 @@ router.post('/register/member', [
     // Create member
     const member = new User({
       name,
-      email,
+      ...(email && { email }),
       phone,
       password,
       loginId: loginId.toLowerCase(),
@@ -200,7 +203,8 @@ router.post('/register/member', [
       membershipStatus: 'active',
       membershipStartDate,
       membershipEndDate,
-      membershipFee: membershipFee || 0
+      membershipFee: membershipFee || 0,
+      profilePhoto: profilePhoto || null
     });
 
     await member.save();
@@ -215,10 +219,13 @@ router.post('/register/member', [
         id: member._id,
         name: member.name,
         email: member.email,
+        phone: member.phone,
+        loginId: member.loginId,
         role: member.role,
         referralCode: member.referralCode,
         membershipStatus: member.membershipStatus,
         membershipEndDate: member.membershipEndDate,
+        profilePhoto: member.profilePhoto,
         gymOwner: {
           id: gymOwner._id,
           name: gymOwner.name,
@@ -310,6 +317,7 @@ router.post('/login', [
       responseData.loginId = user.loginId;
       responseData.membershipStatus = user.membershipStatus;
       responseData.membershipEndDate = user.membershipEndDate;
+      responseData.profilePhoto = user.profilePhoto;
       responseData.gymOwner = {
         id: gymOwner._id,
         name: gymOwner.name,
