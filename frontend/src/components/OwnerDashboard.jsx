@@ -618,6 +618,14 @@ const OwnerDashboard = ({ user, setUser }) => {
             <span>{item.label}</span>
           </button>
         ))}
+        <button
+          className="od-mobile-nav-btn od-mobile-logout-btn"
+          onClick={handleLogout}
+          aria-label="Logout"
+        >
+          <FiLogOut size={18} />
+          <span>Logout</span>
+        </button>
       </nav>
 
       {/* ══ MODALS ══ */}

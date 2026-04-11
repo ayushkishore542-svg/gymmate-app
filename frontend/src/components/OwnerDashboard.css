@@ -873,6 +873,14 @@
   color: var(--accent);
 }
 
+.od-mobile-nav-btn.od-mobile-logout-btn {
+  color: #ef4444;
+}
+.od-mobile-nav-btn.od-mobile-logout-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    RESPONSIVE BREAKPOINTS
    ═══════════════════════════════════════════════════════════════ */
