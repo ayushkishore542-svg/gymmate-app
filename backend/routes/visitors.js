@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Visitor = require('../models/Visitor');
 const authMiddleware = require('../middleware/auth');
@@ -34,9 +35,15 @@ router.post('/', authMiddleware, async (req, res) => {
 router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
     const { converted } = req.query;
 
-    let query = { gymOwnerId: ownerId };
+    let query = { gymOwnerId: ownerObjectId };
     
     if (converted !== undefined) {
       query.convertedToMember = converted === 'true';

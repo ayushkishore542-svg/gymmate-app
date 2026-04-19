@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
@@ -158,9 +159,15 @@ router.get('/member/:memberId', authMiddleware, async (req, res) => {
 router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
     const { date } = req.query;
 
-    let query = { gymOwnerId: ownerId };
+    let query = { gymOwnerId: ownerObjectId };
 
     if (date) {
       query.date = date;
@@ -185,6 +192,12 @@ router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
 router.get('/gym/:ownerId/stats', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
     const { period } = req.query; // 'week', 'month', 'year'
 
     let startDate = new Date();
@@ -204,7 +217,7 @@ router.get('/gym/:ownerId/stats', authMiddleware, async (req, res) => {
     }
 
     const attendances = await Attendance.find({
-      gymOwnerId: ownerId,
+      gymOwnerId: ownerObjectId,
       createdAt: { $gte: startDate }
     });
 

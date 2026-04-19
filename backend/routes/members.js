@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const User = require('../models/User');
 const Payment = require('../models/Payment');
@@ -10,8 +11,13 @@ router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
     
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+    
     const members = await User.find({ 
-      gymOwnerId: ownerId,
+      gymOwnerId: ownerObjectId,
       role: 'member'
     }).select('-password').sort({ createdAt: -1 });
 
@@ -205,11 +211,16 @@ router.get('/gym/:ownerId/expiring', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
     
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+    
     const sevenDaysFromNow = new Date();
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
 
     const expiringMembers = await User.find({
-      gymOwnerId: ownerId,
+      gymOwnerId: ownerObjectId,
       role: 'member',
       membershipStatus: 'active',
       membershipEndDate: {
@@ -231,11 +242,16 @@ router.get('/gym/:ownerId/inactive', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
     
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+    
     const threeDaysAgo = new Date();
     threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
     const inactiveMembers = await User.find({
-      gymOwnerId: ownerId,
+      gymOwnerId: ownerObjectId,
       role: 'member',
       membershipStatus: 'active',
       $or: [
