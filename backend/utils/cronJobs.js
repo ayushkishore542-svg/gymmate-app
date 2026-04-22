@@ -33,31 +33,42 @@ const checkExpiredMemberships = cron.schedule('0 0 * * *', async () => {
   }
 });
 
-// Check and update expired gym owner subscriptions - runs daily at midnight
-const checkExpiredSubscriptions = cron.schedule('0 0 * * *', async () => {
+// Check and update expired gym owner subscriptions - runs daily at midnight IST (18:30 UTC)
+const checkExpiredSubscriptions = cron.schedule('30 18 * * *', async () => {
   try {
     console.log('Running expired subscription check...');
-    
-    const now = new Date();
-    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
 
-    // Find owners whose subscription expired more than 3 days ago
-    const expiredOwners = await User.find({
+    const now = new Date();
+
+    // 1. Trial owners whose trial has ended AND have not added payment method
+    const expiredTrials = await User.find({
       role: 'owner',
-      subscriptionStatus: { $in: ['trial', 'active'] },
-      subscriptionEndDate: { $lt: threeDaysAgo }
+      subscriptionStatus: 'trial',
+      subscriptionEndDate: { $lt: now },
+      paymentMethodAdded: { $ne: true },
     });
 
-    // Update their status to expired
-    for (const owner of expiredOwners) {
+    for (const owner of expiredTrials) {
       owner.subscriptionStatus = 'expired';
       await owner.save();
-      console.log(`Subscription expired for gym ID: ${owner._id} (${owner.gymName})`);
-      
-      // TODO: Send notification to owner
+      console.log(`Trial expired for owner ${owner._id} (${owner.gymName})`);
+      // TODO: Send push/email notification
     }
 
-    console.log(`Processed ${expiredOwners.length} expired subscriptions`);
+    // 2. Cancelled subscriptions whose access period has ended
+    const accessEnded = await User.find({
+      role: 'owner',
+      subscriptionStatus: 'cancelled',
+      currentPeriodEnd: { $lt: now },
+    });
+
+    for (const owner of accessEnded) {
+      owner.subscriptionStatus = 'expired';
+      await owner.save();
+      console.log(`Cancelled access ended for owner ${owner._id} (${owner.gymName})`);
+    }
+
+    console.log(`Processed ${expiredTrials.length + accessEnded.length} expired subscriptions`);
 
   } catch (error) {
     console.error('Error checking expired subscriptions:', error);

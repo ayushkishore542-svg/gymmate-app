@@ -15,7 +15,9 @@ const memberRoutes = require('./routes/members');
 const attendanceRoutes = require('./routes/attendance');
 const paymentRoutes = require('./routes/payments');
 const visitorRoutes = require('./routes/visitors');
-const noticeRoutes = require('./routes/notices');
+const noticeRoutes        = require('./routes/notices');
+const subscriptionRoutes  = require('./routes/subscriptions');
+const webhookRoutes       = require('./routes/webhooks');
 
 // Calorie Tracker routes
 const calorieSubscriptionRoutes = require('./routes/calorieSubscription');
@@ -83,6 +85,13 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+// ── Raw body capture for Razorpay webhook signature verification ──────────
+// Must come BEFORE express.json(). Saves raw buffer to req.rawBody.
+app.use('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), (req, _res, next) => {
+  req.rawBody = req.body; // req.body is a Buffer here due to express.raw()
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(mongoSanitize({ replaceWith: '_' }));
@@ -107,13 +116,28 @@ app.use('/api/', apiLimiter);
 app.use('/api/auth/login',    authLimiter);
 app.use('/api/auth/register', authLimiter);
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/members', memberRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/visitors', visitorRoutes);
-app.use('/api/notices', noticeRoutes);
+// Middleware references (already required as authMiddleware in routes,
+// but applied globally here for subscriptionGuard)
+const authMiddleware    = require('./middleware/auth');
+const subscriptionGuard = require('./middleware/subscriptionGuard');
+
+// ── Public / unguarded routes ──────────────────────────────────────────────
+app.use('/api/auth',          authRoutes);
+app.use('/api/webhooks',      webhookRoutes);       // no auth — Razorpay calls this directly
+app.use('/api/subscriptions', subscriptionRoutes);  // needs auth, but NOT subscription guard
+
+// ── Owner-side data routes — guarded by auth + subscription status ─────────
+// subscriptionGuard checks req.user (set by authMiddleware inside each route)
+// and returns 403 { subscriptionRequired: true } if trial expired / cancelled.
+// Members pass through the guard automatically (role check inside guard).
+// authMiddleware runs first to populate req.user, then subscriptionGuard checks status.
+// Individual route handlers also call authMiddleware (by design in each route file)
+// — that's acceptable redundancy vs. refactoring every route.
+app.use('/api/members',    authMiddleware, subscriptionGuard, memberRoutes);
+app.use('/api/attendance', authMiddleware, subscriptionGuard, attendanceRoutes);
+app.use('/api/payments',   authMiddleware, subscriptionGuard, paymentRoutes);
+app.use('/api/visitors',   authMiddleware, subscriptionGuard, visitorRoutes);
+app.use('/api/notices',    authMiddleware, subscriptionGuard, noticeRoutes);
 
 // Calorie Tracker routes (under /api/calorie/*)
 app.use('/api/calorie/subscription', calorieSubscriptionRoutes);

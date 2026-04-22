@@ -59,10 +59,10 @@ const userSchema = new mongoose.Schema({
     default: null
   },
   
-  // Owner's membership status (subscription to app)
+  // Owner's subscription to the GymMate app
   subscriptionStatus: {
     type: String,
-    enum: ['trial', 'active', 'expired', 'cancelled'],
+    enum: ['trial', 'active', 'expired', 'cancelled', 'halted', 'failed'],
     default: 'trial'
   },
   subscriptionStartDate: {
@@ -72,14 +72,24 @@ const userSchema = new mongoose.Schema({
   subscriptionEndDate: {
     type: Date,
     default: function() {
-      // 3 days trial
-      return new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+      // 15-day free trial
+      return new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
     }
   },
   subscriptionFee: {
     type: Number,
-    default: 700 // Monthly fee for gym owners
+    default: 699 // Monthly fee in INR
   },
+
+  // Razorpay Subscription fields
+  razorpaySubscriptionId: { type: String, default: null },
+  razorpayCustomerId:     { type: String, default: null },
+  razorpayShortUrl:       { type: String, default: null }, // hosted payment link
+  paymentMethodAdded:     { type: Boolean, default: false },
+  currentPeriodStart:     { type: Date, default: null },
+  currentPeriodEnd:       { type: Date, default: null },
+  lastPaymentAt:          { type: Date, default: null },
+  lastPaymentStatus:      { type: String, default: null },
   
   // For Members
   gymOwnerId: {

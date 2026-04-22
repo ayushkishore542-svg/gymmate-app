@@ -69,7 +69,7 @@ router.post('/register/owner', [
       referredBy: referralCode || null,
       subscriptionStatus: 'trial',
       subscriptionStartDate: new Date(),
-      subscriptionEndDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) // 3 days trial
+      subscriptionEndDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15-day free trial
     });
 
     await owner.save();
@@ -312,6 +312,8 @@ router.post('/login', [
       responseData.gymQRCode = user.gymQRCode;
       responseData.subscriptionStatus = user.subscriptionStatus;
       responseData.subscriptionEndDate = user.subscriptionEndDate;
+      responseData.razorpayShortUrl = user.razorpayShortUrl;
+      responseData.paymentMethodAdded = user.paymentMethodAdded;
     } else {
       const gymOwner = await User.findById(user.gymOwnerId);
       responseData.loginId = user.loginId;
