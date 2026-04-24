@@ -3,6 +3,14 @@ const router   = express.Router();
 const User     = require('../models/User');
 const { verifyWebhookSignature } = require('../services/razorpayService');
 
+// ─── GET /api/webhooks/razorpay/ping ────────────────────────────────────────
+// Simple health check to confirm the webhook route is reachable by Razorpay.
+// Test: curl https://gymmate-app-production.up.railway.app/api/webhooks/razorpay/ping
+router.get('/razorpay/ping', (req, res) => {
+  console.log('[Webhook] PING received from', req.ip, 'at', new Date().toISOString());
+  res.status(200).json({ ok: true, time: new Date().toISOString() });
+});
+
 // ─── POST /api/webhooks/razorpay ────────────────────────────────────────────
 //
 // IMPORTANT: This route uses express.raw() so we receive the raw body
@@ -12,18 +20,45 @@ const { verifyWebhookSignature } = require('../services/razorpayService');
 // ────────────────────────────────────────────────────────────────────────────
 
 router.post('/razorpay', async (req, res) => {
+  // ── VERBOSE ENTRY LOGGING (pre-validation) ────────────────────────────────
+  console.log('─────────────────────────────────────────────────────────');
+  console.log('🔔 [WEBHOOK] Request received at', new Date().toISOString());
+  console.log('🔔 [WEBHOOK] Method:', req.method, '| IP:', req.ip);
+  console.log('🔔 [WEBHOOK] Headers:', JSON.stringify({
+    'content-type':        req.headers['content-type'],
+    'x-razorpay-signature': req.headers['x-razorpay-signature']
+      ? req.headers['x-razorpay-signature'].substring(0, 20) + '…'
+      : 'MISSING',
+    'user-agent': req.headers['user-agent'],
+  }, null, 2));
+  console.log('🔔 [WEBHOOK] req.rawBody type:', typeof req.rawBody,
+    '| is Buffer:', Buffer.isBuffer(req.rawBody),
+    '| length:', req.rawBody ? req.rawBody.length : 'N/A');
+  console.log('🔔 [WEBHOOK] RAZORPAY_WEBHOOK_SECRET set?',
+    process.env.RAZORPAY_WEBHOOK_SECRET ? 'YES (len=' + process.env.RAZORPAY_WEBHOOK_SECRET.length + ')' : 'NO ❌');
+  console.log('─────────────────────────────────────────────────────────');
+
   const signature = req.headers['x-razorpay-signature'];
 
   // ── 1. Verify signature ───────────────────────────────────────────────────
   const rawBody = req.rawBody; // set by express.raw() in server.js
   if (!rawBody) {
-    console.error('[Webhook] rawBody missing — check server.js middleware order');
+    console.error('❌ [WEBHOOK] rawBody missing — check server.js middleware order');
     return res.status(400).json({ message: 'Bad request: missing body' });
   }
 
+  if (!signature) {
+    console.error('❌ [WEBHOOK] x-razorpay-signature header missing');
+    return res.status(400).json({ message: 'Bad request: missing signature' });
+  }
+
   const isValid = verifyWebhookSignature(rawBody, signature);
+  console.log('🔔 [WEBHOOK] Signature valid?', isValid ? 'YES ✅' : 'NO ❌');
   if (!isValid) {
-    console.warn('[Webhook] Invalid signature — rejecting');
+    console.warn('❌ [WEBHOOK] Invalid signature — rejecting. Secret used (first 5 chars):',
+      process.env.RAZORPAY_WEBHOOK_SECRET
+        ? process.env.RAZORPAY_WEBHOOK_SECRET.substring(0, 5)
+        : 'NOT SET');
     return res.status(400).json({ message: 'Invalid signature' });
   }
 
@@ -38,7 +73,9 @@ router.post('/razorpay', async (req, res) => {
   const eventType = event.event;
   const payload   = event.payload;
 
-  console.log(`[Webhook] Received: ${eventType}`);
+  console.log(`✅ [WEBHOOK] Event parsed: "${eventType}"`);
+  const subId = payload?.subscription?.entity?.id || payload?.payment?.entity?.subscription_id || 'N/A';
+  console.log(`✅ [WEBHOOK] Subscription ID in payload: ${subId}`);
 
   // ── 3. Dispatch ───────────────────────────────────────────────────────────
   try {
