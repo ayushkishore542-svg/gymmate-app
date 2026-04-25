@@ -58,6 +58,9 @@ router.post('/register/owner', [
     }
 
     // Create owner
+    const trialStart = new Date();
+    const trialEnd   = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+
     const owner = new User({
       name,
       email,
@@ -67,9 +70,19 @@ router.post('/register/owner', [
       gymName,
       referralCode: newReferralCode,
       referredBy: referralCode || null,
-      subscriptionStatus: 'trial',
-      subscriptionStartDate: new Date(),
-      subscriptionEndDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15-day free trial
+      // Subscription
+      subscriptionStatus:    'trial',
+      subscriptionStartDate: trialStart,
+      subscriptionEndDate:   trialEnd,
+      // Razorpay fields — all null until owner sets up auto-pay
+      paymentMethodAdded:       false,
+      razorpaySubscriptionId:   null,
+      razorpayCustomerId:       null,
+      razorpayShortUrl:         null,
+      currentPeriodStart:       null,
+      currentPeriodEnd:         null,
+      lastPaymentAt:            null,
+      lastPaymentStatus:        null,
     });
 
     await owner.save();

@@ -18,6 +18,9 @@ const visitorRoutes = require('./routes/visitors');
 const noticeRoutes        = require('./routes/notices');
 const subscriptionRoutes  = require('./routes/subscriptions');
 const webhookRoutes       = require('./routes/webhooks');
+const dashboardRoutes     = require('./routes/dashboard');
+const todoRoutes          = require('./routes/todos');
+const expenseRoutes       = require('./routes/expenses');
 
 // Calorie Tracker routes
 const calorieSubscriptionRoutes = require('./routes/calorieSubscription');
@@ -138,6 +141,9 @@ app.use('/api/attendance', authMiddleware, subscriptionGuard, attendanceRoutes);
 app.use('/api/payments',   authMiddleware, subscriptionGuard, paymentRoutes);
 app.use('/api/visitors',   authMiddleware, subscriptionGuard, visitorRoutes);
 app.use('/api/notices',    authMiddleware, subscriptionGuard, noticeRoutes);
+app.use('/api/dashboard', authMiddleware, subscriptionGuard, dashboardRoutes);
+app.use('/api/todos',     authMiddleware, subscriptionGuard, todoRoutes);
+app.use('/api/expenses',  authMiddleware, subscriptionGuard, expenseRoutes);
 
 // Calorie Tracker routes (under /api/calorie/*)
 app.use('/api/calorie/subscription', calorieSubscriptionRoutes);
