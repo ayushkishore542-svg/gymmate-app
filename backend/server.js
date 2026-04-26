@@ -21,6 +21,15 @@ const webhookRoutes       = require('./routes/webhooks');
 const dashboardRoutes     = require('./routes/dashboard');
 const todoRoutes          = require('./routes/todos');
 const expenseRoutes       = require('./routes/expenses');
+const settingsRoutes      = require('./routes/settings');
+const exportRoutes        = require('./routes/exports');
+const staffRoutes         = require('./routes/staff');
+const workoutPlanRoutes   = require('./routes/workoutPlans');
+const batchRoutes         = require('./routes/batches');
+const inventoryRoutes     = require('./routes/inventory');
+const feedbackRoutes      = require('./routes/feedback');
+const referralRoutes      = require('./routes/referrals');
+const supportRoutes       = require('./routes/support');
 
 // Calorie Tracker routes
 const calorieSubscriptionRoutes = require('./routes/calorieSubscription');
@@ -144,6 +153,15 @@ app.use('/api/notices',    authMiddleware, subscriptionGuard, noticeRoutes);
 app.use('/api/dashboard', authMiddleware, subscriptionGuard, dashboardRoutes);
 app.use('/api/todos',     authMiddleware, subscriptionGuard, todoRoutes);
 app.use('/api/expenses',  authMiddleware, subscriptionGuard, expenseRoutes);
+app.use('/api/settings',  authMiddleware, subscriptionGuard, settingsRoutes);
+app.use('/api/exports',   authMiddleware, subscriptionGuard, exportRoutes);
+app.use('/api/staff',          authMiddleware, subscriptionGuard, staffRoutes);
+app.use('/api/workout-plans',  authMiddleware, subscriptionGuard, workoutPlanRoutes);
+app.use('/api/batches',        authMiddleware, subscriptionGuard, batchRoutes);
+app.use('/api/inventory',      authMiddleware, subscriptionGuard, inventoryRoutes);
+app.use('/api/feedback',       authMiddleware, subscriptionGuard, feedbackRoutes);
+app.use('/api/referrals',      authMiddleware, subscriptionGuard, referralRoutes);
+app.use('/api/support',        authMiddleware, subscriptionGuard, supportRoutes);
 
 // Calorie Tracker routes (under /api/calorie/*)
 app.use('/api/calorie/subscription', calorieSubscriptionRoutes);

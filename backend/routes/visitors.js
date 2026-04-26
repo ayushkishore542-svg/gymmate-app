@@ -7,7 +7,7 @@ const authMiddleware = require('../middleware/auth');
 // Add a visitor
 router.post('/', authMiddleware, async (req, res) => {
   try {
-    const { gymOwnerId, name, phone, email, interestedInMembership, notes } = req.body;
+    const { gymOwnerId, name, phone, email, interestedInMembership, notes, photo, address } = req.body;
 
     const visitor = new Visitor({
       gymOwnerId,
@@ -15,7 +15,9 @@ router.post('/', authMiddleware, async (req, res) => {
       phone,
       email,
       interestedInMembership,
-      notes
+      notes,
+      photo: photo || null,
+      address: address || ''
     });
 
     await visitor.save();

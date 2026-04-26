@@ -224,4 +224,63 @@ router.get('/gym/:ownerId/stats', authMiddleware, async (req, res) => {
   }
 });
 
+// Revenue summary for owner dashboard
+router.get('/summary/:ownerId', authMiddleware, async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // All membership payments for this gym
+    const allPayments = await Payment.find({
+      gymOwnerId: ownerObjectId,
+      paymentType: 'membership'
+    }).populate('userId', 'name loginId phone membershipPlan membershipEndDate membershipStatus');
+
+    const thisMonthPayments = allPayments.filter(p => new Date(p.createdAt) >= monthStart);
+
+    const collected = thisMonthPayments
+      .filter(p => p.paymentStatus === 'completed')
+      .reduce((s, p) => s + p.amount, 0);
+
+    const pending = allPayments
+      .filter(p => p.paymentStatus === 'pending')
+      .reduce((s, p) => s + p.amount, 0);
+
+    const overdue = allPayments
+      .filter(p => p.paymentStatus === 'pending' && new Date(p.periodEnd) < now)
+      .reduce((s, p) => s + p.amount, 0);
+
+    // Member-wise payment list
+    const memberPayments = allPayments.map(p => ({
+      _id: p._id,
+      memberId: p.userId?._id,
+      name: p.userId?.name || 'Unknown',
+      loginId: p.userId?.loginId,
+      plan: p.userId?.membershipPlan,
+      amount: p.amount,
+      dueDate: p.periodEnd,
+      paidDate: p.paymentStatus === 'completed' ? p.createdAt : null,
+      status: p.paymentStatus === 'completed' ? 'Paid'
+        : (new Date(p.periodEnd) < now ? 'Overdue' : 'Pending')
+    }));
+
+    res.json({
+      collected,
+      pending,
+      overdue,
+      memberPayments,
+      count: memberPayments.length
+    });
+  } catch (error) {
+    console.error('Payment summary error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 module.exports = router;

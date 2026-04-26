@@ -145,7 +145,8 @@ router.post('/register/member', [
       membershipDuration,
       membershipPlan,
       membershipStartDate: membershipStartDateInput,
-      profilePhoto
+      profilePhoto,
+      address
     } = req.body;
 
     // Normalise duration: accept a number, a plan string ('1month','3months','6months','1year'),
@@ -217,7 +218,8 @@ router.post('/register/member', [
       membershipStartDate,
       membershipEndDate,
       membershipFee: membershipFee || 0,
-      profilePhoto: profilePhoto || null
+      profilePhoto: profilePhoto || null,
+      address: address || ''
     });
 
     await member.save();
@@ -374,6 +376,108 @@ router.get('/me', async (req, res) => {
   } catch (error) {
     console.error('Get me error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ── Update Profile ──────────────────────────────────────────────────────────
+const authMiddleware = require('../middleware/auth');
+
+router.put('/update-profile', authMiddleware, async (req, res) => {
+  try {
+    const { name, phone, address, gymName, profilePhoto, gymLogo } = req.body;
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (name !== undefined)         user.name = name.trim();
+    if (phone !== undefined)        user.phone = phone.trim();
+    if (address !== undefined)      user.address = address.trim();
+    if (gymName !== undefined)      user.gymName = gymName.trim();
+    if (profilePhoto !== undefined) user.profilePhoto = profilePhoto;
+    if (gymLogo !== undefined)      user.gymLogo = gymLogo;
+
+    await user.save();
+    const userObj = user.toObject();
+    delete userObj.password;
+    res.json({ user: userObj, message: 'Profile updated successfully' });
+  } catch (err) {
+    console.error('[Update profile]', err);
+    if (err.code === 11000) {
+      return res.status(400).json({ message: 'Phone number already in use' });
+    }
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── Change Password ─────────────────────────────────────────────────────────
+router.put('/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ message: 'Old and new passwords are required' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const isMatch = await user.comparePassword(oldPassword);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+
+    user.password = newPassword; // pre-save hook will hash it
+    await user.save();
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('[Change password]', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── Deactivate Gym ──────────────────────────────────────────────────────────
+router.put('/deactivate-gym', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || user.role !== 'owner') {
+      return res.status(403).json({ message: 'Only owners can deactivate their gym' });
+    }
+
+    user.isActive = false;
+    await user.save();
+
+    // Deactivate all members under this gym
+    await User.updateMany({ gymOwnerId: user._id, role: 'member' }, { isActive: false });
+
+    res.json({ message: 'Gym deactivated. All members have been deactivated.' });
+  } catch (err) {
+    console.error('[Deactivate gym]', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── Delete Account ──────────────────────────────────────────────────────────
+router.delete('/delete-account', authMiddleware, async (req, res) => {
+  try {
+    const { confirmation } = req.body;
+    if (confirmation !== 'DELETE') {
+      return res.status(400).json({ message: 'Type DELETE to confirm account deletion' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (user.role === 'owner') {
+      // Delete all members under this gym
+      await User.deleteMany({ gymOwnerId: user._id, role: 'member' });
+    }
+
+    await User.findByIdAndDelete(user._id);
+    res.json({ message: 'Account deleted permanently' });
+  } catch (err) {
+    console.error('[Delete account]', err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

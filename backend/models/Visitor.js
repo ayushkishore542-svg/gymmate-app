@@ -36,7 +36,17 @@ const visitorSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  
+
+  photo: {
+    type: String,
+    default: null
+  },
+
+  address: {
+    type: String,
+    default: ''
+  },
+
   // Track if converted to member
   convertedToMember: {
     type: Boolean,
