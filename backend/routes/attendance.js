@@ -314,6 +314,29 @@ router.get('/report/:ownerId', authMiddleware, async (req, res) => {
   }
 });
 
+// Get count of currently checked-in members (checked in today, not yet checked out)
+router.get('/active-count/:ownerId', authMiddleware, async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ message: 'Invalid owner ID' });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+    const today = new Date().toISOString().split('T')[0];
+
+    const activeCount = await Attendance.countDocuments({
+      gymOwnerId: ownerObjectId,
+      date: today,
+      checkOutTime: null,
+    });
+
+    res.json({ activeCount, date: today });
+  } catch (error) {
+    console.error('Active count error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // QR-based check-in (no auth — called by member's phone scanning QR)
 router.post('/qr-checkin', async (req, res) => {
   try {
