@@ -481,4 +481,73 @@ router.delete('/delete-account', authMiddleware, async (req, res) => {
   }
 });
 
+// ── PUT /update-member-profile — member-specific profile update ─────────────
+router.put('/update-member-profile', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || user.role !== 'member')
+      return res.status(403).json({ message: 'Only members can use this endpoint' });
+
+    const { name, phone, address, profilePhoto, avatarId, fitnessGoal, targetWeight, dailyCalorieTarget } = req.body;
+
+    if (name    !== undefined) user.name    = name.trim();
+    if (phone   !== undefined) user.phone   = phone.trim();
+    if (address !== undefined) user.address = address.trim();
+    if (profilePhoto !== undefined) user.profilePhoto = profilePhoto;
+    if (avatarId     !== undefined) user.avatarId     = avatarId;
+    if (fitnessGoal  !== undefined) user.fitnessGoal  = fitnessGoal;
+    if (targetWeight !== undefined) user.targetWeight = targetWeight;
+    if (dailyCalorieTarget !== undefined) user.dailyCalorieTarget = dailyCalorieTarget;
+
+    await user.save();
+    const userObj = user.toObject();
+    delete userObj.password;
+    res.json({ user: userObj, message: 'Profile updated successfully' });
+  } catch (err) {
+    console.error('[Update member profile]', err);
+    if (err.code === 11000)
+      return res.status(400).json({ message: 'Phone number already in use' });
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── DELETE /delete-member-account — member self-deletion ────────────────────
+router.delete('/delete-member-account', authMiddleware, async (req, res) => {
+  try {
+    const { confirmation } = req.body;
+    if (confirmation !== 'DELETE')
+      return res.status(400).json({ message: 'Send confirmation: "DELETE" to proceed' });
+
+    const user = await User.findById(req.user._id);
+    if (!user || user.role !== 'member')
+      return res.status(403).json({ message: 'Only members can use this endpoint' });
+
+    await User.findByIdAndDelete(user._id);
+    res.json({ message: 'Account deleted permanently' });
+  } catch (err) {
+    console.error('[Delete member account]', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/auth/gym-contact/:ownerId — gym contact info for members ────────
+router.get('/gym-contact/:ownerId', async (req, res) => {
+  try {
+    const owner = await User.findById(req.params.ownerId)
+      .select('name gymName email phone');
+    if (!owner) {
+      return res.status(404).json({ message: 'Gym not found' });
+    }
+    res.json({
+      gymName:   owner.gymName  || '',
+      ownerName: owner.name     || '',
+      email:     owner.email    || '',
+      phone:     owner.phone    || '',
+    });
+  } catch (error) {
+    console.error('[Gym contact]', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 module.exports = router;

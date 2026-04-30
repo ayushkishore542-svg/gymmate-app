@@ -46,7 +46,8 @@ const {
   checkExpiredMemberships,
   checkExpiredSubscriptions,
   sendMembershipReminders,
-  calculateLeaderboards
+  calculateLeaderboards,
+  autoCloseStaleCheckIns,
 } = require('./utils/cronJobs');
 
 // Initialize app
@@ -163,6 +164,14 @@ app.use('/api/feedback',       authMiddleware, subscriptionGuard, feedbackRoutes
 app.use('/api/referrals',      authMiddleware, subscriptionGuard, referralRoutes);
 app.use('/api/support',        authMiddleware, subscriptionGuard, supportRoutes);
 
+// ── Member feature routes (auth only, no subscription guard — member-side) ───
+const memberWorkoutRoutes  = require('./routes/memberWorkouts');
+const memberDietRoutes     = require('./routes/memberDiet');
+const memberProgressRoutes = require('./routes/memberProgress');
+app.use('/api/member-workouts',  authMiddleware, memberWorkoutRoutes);
+app.use('/api/member-diet',      authMiddleware, memberDietRoutes);
+app.use('/api/member-progress',  authMiddleware, memberProgressRoutes);
+
 // Calorie Tracker routes (under /api/calorie/*)
 app.use('/api/calorie/subscription', calorieSubscriptionRoutes);
 app.use('/api/calorie/foods',        calorieFoodsRoutes);
@@ -205,6 +214,7 @@ mongoose.connect(process.env.MONGO_URI, {
   checkExpiredSubscriptions.start();
   sendMembershipReminders.start();
   calculateLeaderboards.start();
+  autoCloseStaleCheckIns.start();
   console.log('✅ Cron jobs started');
 })
 .catch((err) => {

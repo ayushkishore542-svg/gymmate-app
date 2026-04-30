@@ -283,4 +283,21 @@ router.get('/summary/:ownerId', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/payments/member/:memberId — payment history for a specific member
+router.get('/member/:memberId', authMiddleware, async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(memberId)) {
+      return res.status(400).json({ message: 'Invalid member ID' });
+    }
+    const payments = await Payment.find({ userId: new mongoose.Types.ObjectId(memberId) })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json({ payments });
+  } catch (error) {
+    console.error('Member payment history error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 module.exports = router;

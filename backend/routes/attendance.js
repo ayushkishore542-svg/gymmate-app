@@ -5,254 +5,230 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const authMiddleware = require('../middleware/auth');
 
-// Mark attendance via QR scan
+// ─── helpers ───────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().split('T')[0];
+
+// Auto-close stale check-ins for a member before creating a new one
+// Closes any open check-ins from PREVIOUS days with durationUnknown = true
+async function closeStaleCheckIns(memberId) {
+  const today = todayStr();
+  const stale = await Attendance.find({
+    memberId,
+    checkOutTime: null,
+    date: { $lt: today },
+  });
+  for (const rec of stale) {
+    rec.checkOutTime = null;       // stays null — no checkout happened
+    rec.duration = null;           // unknown
+    rec.durationUnknown = true;    // flag it
+    await rec.save();
+  }
+}
+
+// ─── POST /checkin ──────────────────────────────────────────────────────────
 router.post('/checkin', authMiddleware, async (req, res) => {
   try {
     const { memberId, gymId } = req.body;
 
-    // Verify member
     const member = await User.findById(memberId);
-    if (!member || member.role !== 'member') {
+    if (!member || member.role !== 'member')
       return res.status(400).json({ message: 'Invalid member' });
-    }
 
-    // Verify gym owner
     const gymOwner = await User.findById(gymId);
-    if (!gymOwner || gymOwner.role !== 'owner') {
+    if (!gymOwner || gymOwner.role !== 'owner')
       return res.status(400).json({ message: 'Invalid gym' });
-    }
 
-    // Check if member belongs to this gym
-    if (member.gymOwnerId.toString() !== gymId) {
+    if (member.gymOwnerId.toString() !== gymId)
       return res.status(403).json({ message: 'Member does not belong to this gym' });
-    }
 
-    // Check membership status
-    if (member.membershipStatus !== 'active') {
+    if (member.membershipStatus !== 'active')
       return res.status(403).json({ message: 'Membership is not active' });
-    }
 
-    // Check if membership expired
-    if (new Date(member.membershipEndDate) < new Date()) {
+    if (new Date(member.membershipEndDate) < new Date())
       return res.status(403).json({ message: 'Membership has expired' });
-    }
 
-    // Check if already checked in today
-    const today = new Date().toISOString().split('T')[0];
-    const existingAttendance = await Attendance.findOne({
-      memberId,
-      date: today,
-      checkOutTime: null
-    });
+    // Auto-close any stale open check-ins from previous days
+    await closeStaleCheckIns(memberId);
 
-    if (existingAttendance) {
-      return res.status(400).json({ 
-        message: 'Already checked in',
-        attendance: existingAttendance
+    const today = todayStr();
+
+    // Check if already checked in TODAY (no checkout yet)
+    const existing = await Attendance.findOne({ memberId, date: today, checkOutTime: null });
+    if (existing) {
+      return res.status(400).json({
+        message: 'Already checked in today',
+        attendance: existing,
+        alreadyCheckedIn: true,
       });
     }
 
-    // Create attendance record
     const attendance = new Attendance({
       memberId,
       gymOwnerId: gymId,
       checkInTime: new Date(),
-      date: today
+      date: today,
     });
-
     await attendance.save();
 
-    // Update member's last attendance
     member.lastAttendance = new Date();
     await member.save();
 
     res.status(201).json({
       message: 'Check-in successful',
       attendance,
-      member: {
-        name: member.name,
-        membershipEndDate: member.membershipEndDate
-      }
+      member: { name: member.name, membershipEndDate: member.membershipEndDate },
     });
-
   } catch (error) {
     console.error('Check-in error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Checkout
+// ─── POST /checkout ─────────────────────────────────────────────────────────
+// Allows checkout any time on the SAME DAY as check-in
 router.post('/checkout', authMiddleware, async (req, res) => {
   try {
     const { memberId } = req.body;
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
 
-    // Find today's attendance
+    // Find today's open check-in (no checkout yet)
     const attendance = await Attendance.findOne({
       memberId,
       date: today,
-      checkOutTime: null
+      checkOutTime: null,
     });
 
     if (!attendance) {
-      return res.status(400).json({ message: 'No active check-in found' });
+      return res.status(400).json({ message: 'No active check-in found for today' });
     }
 
-    // Update checkout time and duration
-    attendance.checkOutTime = new Date();
-    const durationMs = attendance.checkOutTime - attendance.checkInTime;
+    const now = new Date();
+    attendance.checkOutTime = now;
+
+    const durationMs = now - attendance.checkInTime;
     attendance.duration = Math.floor(durationMs / (1000 * 60)); // minutes
+    attendance.durationUnknown = false;
 
     await attendance.save();
 
-    res.json({
-      message: 'Check-out successful',
-      attendance
-    });
-
+    res.json({ message: 'Check-out successful', attendance });
   } catch (error) {
     console.error('Check-out error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Get attendance for a member
+// ─── GET /today-status/:memberId ────────────────────────────────────────────
+// Returns today's check-in status for a member
+router.get('/today-status/:memberId', authMiddleware, async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const today = todayStr();
+
+    const todayRecord = await Attendance.findOne({ memberId, date: today });
+
+    res.json({
+      date: today,
+      checkedIn: !!todayRecord,
+      checkedOut: !!(todayRecord?.checkOutTime),
+      attendance: todayRecord || null,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ─── GET /member/:memberId ──────────────────────────────────────────────────
 router.get('/member/:memberId', authMiddleware, async (req, res) => {
   try {
     const { memberId } = req.params;
     const { startDate, endDate } = req.query;
 
     let query = { memberId };
-
     if (startDate && endDate) {
-      query.date = {
-        $gte: startDate,
-        $lte: endDate
-      };
+      query.date = { $gte: startDate, $lte: endDate };
     }
 
     const attendances = await Attendance.find(query)
       .sort({ date: -1, checkInTime: -1 })
       .limit(100);
 
-    // Calculate stats
     const totalDays = attendances.length;
     const totalMinutes = attendances.reduce((sum, att) => sum + (att.duration || 0), 0);
     const avgDuration = totalDays > 0 ? Math.floor(totalMinutes / totalDays) : 0;
 
-    res.json({
-      attendances,
-      stats: {
-        totalDays,
-        totalMinutes,
-        avgDuration
-      }
-    });
-
+    res.json({ attendances, stats: { totalDays, totalMinutes, avgDuration } });
   } catch (error) {
     console.error('Get member attendance error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Get attendance for a gym (all members)
+// ─── GET /gym/:ownerId ──────────────────────────────────────────────────────
 router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+    if (!mongoose.Types.ObjectId.isValid(ownerId))
       return res.status(400).json({ message: 'Invalid owner ID' });
-    }
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
-
     const { date } = req.query;
-
-    let query = { gymOwnerId: ownerObjectId };
-
-    if (date) {
-      query.date = date;
-    } else {
-      // Default to today
-      query.date = new Date().toISOString().split('T')[0];
-    }
+    const query = { gymOwnerId: ownerObjectId, date: date || todayStr() };
 
     const attendances = await Attendance.find(query)
       .populate('memberId', 'name email phone')
       .sort({ checkInTime: -1 });
 
     res.json({ attendances, count: attendances.length });
-
   } catch (error) {
     console.error('Get gym attendance error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Get attendance statistics for gym
+// ─── GET /gym/:ownerId/stats ────────────────────────────────────────────────
 router.get('/gym/:ownerId/stats', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+    if (!mongoose.Types.ObjectId.isValid(ownerId))
       return res.status(400).json({ message: 'Invalid owner ID' });
-    }
-    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
 
-    const { period } = req.query; // 'week', 'month', 'year'
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+    const { period } = req.query;
 
     let startDate = new Date();
-    
-    switch(period) {
-      case 'week':
-        startDate.setDate(startDate.getDate() - 7);
-        break;
-      case 'month':
-        startDate.setMonth(startDate.getMonth() - 1);
-        break;
-      case 'year':
-        startDate.setFullYear(startDate.getFullYear() - 1);
-        break;
-      default:
-        startDate.setMonth(startDate.getMonth() - 1);
+    switch (period) {
+      case 'week':  startDate.setDate(startDate.getDate() - 7);     break;
+      case 'year':  startDate.setFullYear(startDate.getFullYear() - 1); break;
+      default:      startDate.setMonth(startDate.getMonth() - 1);
     }
 
-    const attendances = await Attendance.find({
-      gymOwnerId: ownerObjectId,
-      createdAt: { $gte: startDate }
-    });
+    const attendances = await Attendance.find({ gymOwnerId: ownerObjectId, createdAt: { $gte: startDate } });
 
-    // Group by date
     const dailyStats = {};
     attendances.forEach(att => {
-      if (!dailyStats[att.date]) {
-        dailyStats[att.date] = 0;
-      }
-      dailyStats[att.date]++;
+      dailyStats[att.date] = (dailyStats[att.date] || 0) + 1;
     });
 
-    // Convert to array
-    const stats = Object.keys(dailyStats).map(date => ({
-      date,
-      count: dailyStats[date]
-    })).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const stats = Object.keys(dailyStats)
+      .map(date => ({ date, count: dailyStats[date] }))
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
 
     res.json({ stats, totalAttendances: attendances.length });
-
   } catch (error) {
     console.error('Get attendance stats error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Attendance report — grouped by member for a date range
+// ─── GET /report/:ownerId ───────────────────────────────────────────────────
 router.get('/report/:ownerId', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+    if (!mongoose.Types.ObjectId.isValid(ownerId))
       return res.status(400).json({ message: 'Invalid owner ID' });
-    }
-    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
 
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
     let { startDate, endDate } = req.query;
     if (!startDate || !endDate) {
       const now = new Date();
@@ -264,39 +240,27 @@ router.get('/report/:ownerId', authMiddleware, async (req, res) => {
 
     const attendances = await Attendance.find({
       gymOwnerId: ownerObjectId,
-      date: { $gte: startDate, $lte: endDate }
+      date: { $gte: startDate, $lte: endDate },
     }).populate('memberId', 'name loginId phone');
 
-    // Group by member
     const memberMap = {};
     attendances.forEach(att => {
       const mid = att.memberId?._id?.toString();
       if (!mid) return;
       if (!memberMap[mid]) {
-        memberMap[mid] = {
-          memberId: mid,
-          name: att.memberId.name,
-          loginId: att.memberId.loginId,
-          daysPresent: 0,
-          records: []
-        };
+        memberMap[mid] = { memberId: mid, name: att.memberId.name, loginId: att.memberId.loginId, daysPresent: 0, records: [] };
       }
       memberMap[mid].daysPresent++;
-      memberMap[mid].records.push({
-        date: att.date,
-        checkInTime: att.checkInTime,
-        checkOutTime: att.checkOutTime
-      });
+      memberMap[mid].records.push({ date: att.date, checkInTime: att.checkInTime, checkOutTime: att.checkOutTime });
     });
 
     const totalDaysInRange = Math.max(1, Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1);
     const members = Object.values(memberMap).map(m => ({
       ...m,
-      attendancePercent: Math.round((m.daysPresent / totalDaysInRange) * 100)
+      attendancePercent: Math.round((m.daysPresent / totalDaysInRange) * 100),
     }));
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayCheckins = attendances.filter(a => a.date === todayStr).length;
+    const todayCheckins = attendances.filter(a => a.date === todayStr()).length;
 
     res.json({
       members,
@@ -305,8 +269,8 @@ router.get('/report/:ownerId', authMiddleware, async (req, res) => {
         averageAttendance: members.length > 0
           ? Math.round(members.reduce((s, m) => s + m.attendancePercent, 0) / members.length)
           : 0,
-        totalMembers: members.length
-      }
+        totalMembers: members.length,
+      },
     });
   } catch (error) {
     console.error('Attendance report error:', error);
@@ -314,63 +278,53 @@ router.get('/report/:ownerId', authMiddleware, async (req, res) => {
   }
 });
 
-// Get count of currently checked-in members (checked in today, not yet checked out)
+// ─── GET /active-count/:ownerId ─────────────────────────────────────────────
 router.get('/active-count/:ownerId', authMiddleware, async (req, res) => {
   try {
     const { ownerId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+    if (!mongoose.Types.ObjectId.isValid(ownerId))
       return res.status(400).json({ message: 'Invalid owner ID' });
-    }
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
-    const today = new Date().toISOString().split('T')[0];
-
-    const activeCount = await Attendance.countDocuments({
-      gymOwnerId: ownerObjectId,
-      date: today,
-      checkOutTime: null,
-    });
-
+    const today = todayStr();
+    const activeCount = await Attendance.countDocuments({ gymOwnerId: ownerObjectId, date: today, checkOutTime: null });
     res.json({ activeCount, date: today });
   } catch (error) {
-    console.error('Active count error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// QR-based check-in (no auth — called by member's phone scanning QR)
+// ─── POST /qr-checkin ───────────────────────────────────────────────────────
 router.post('/qr-checkin', async (req, res) => {
   try {
     const { memberId, gymOwnerId } = req.body;
-    if (!memberId || !gymOwnerId) {
+    if (!memberId || !gymOwnerId)
       return res.status(400).json({ message: 'memberId and gymOwnerId are required' });
-    }
 
     const member = await User.findById(memberId);
-    if (!member || member.role !== 'member') {
+    if (!member || member.role !== 'member')
       return res.status(400).json({ message: 'Invalid member' });
-    }
-    if (member.gymOwnerId.toString() !== gymOwnerId) {
+    if (member.gymOwnerId.toString() !== gymOwnerId)
       return res.status(403).json({ message: 'Member does not belong to this gym' });
-    }
-    if (member.membershipStatus !== 'active') {
+    if (member.membershipStatus !== 'active')
       return res.status(403).json({ message: 'Membership is not active' });
-    }
-    if (new Date(member.membershipEndDate) < new Date()) {
+    if (new Date(member.membershipEndDate) < new Date())
       return res.status(403).json({ message: 'Membership has expired' });
-    }
 
-    const today = new Date().toISOString().split('T')[0];
+    // Auto-close stale previous days
+    await closeStaleCheckIns(memberId);
+
+    const today = todayStr();
     const existing = await Attendance.findOne({ memberId, date: today, checkOutTime: null });
     if (existing) {
-      return res.status(400).json({ message: 'Already checked in today', attendance: existing });
+      return res.status(400).json({
+        message: 'Already checked in today',
+        attendance: existing,
+        alreadyCheckedIn: true,
+      });
     }
 
-    const attendance = new Attendance({
-      memberId,
-      gymOwnerId,
-      checkInTime: new Date(),
-      date: today
-    });
+    const attendance = new Attendance({ memberId, gymOwnerId, checkInTime: new Date(), date: today });
     await attendance.save();
     member.lastAttendance = new Date();
     await member.save();

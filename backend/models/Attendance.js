@@ -24,10 +24,16 @@ const attendanceSchema = new mongoose.Schema({
   },
   
   duration: {
-    type: Number, // in minutes
-    default: 0
+    type: Number, // in minutes — null means unknown/not recorded
+    default: null
   },
-  
+
+  // true when member never checked out and session was auto-closed
+  durationUnknown: {
+    type: Boolean,
+    default: false
+  },
+
   date: {
     type: String, // Format: YYYY-MM-DD
     required: true

@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const User = require('../models/User');
+const Attendance = require('../models/Attendance');
 const { calculateForGym } = require('../routes/calorieLeaderboard');
 
 // Check and update expired memberships - runs daily at midnight
@@ -128,9 +129,53 @@ const calculateLeaderboards = cron.schedule('0 0 * * *', async () => {
   }
 });
 
+// Auto-close stale check-ins — runs every 30 minutes
+// If a member checked in more than 3 hours ago (today) and still hasn't
+// checked out, mark durationUnknown = true (duration stays null = "--").
+// Does NOT set checkOutTime — so member can still check out later same day.
+const autoCloseStaleCheckIns = cron.schedule('*/30 * * * *', async () => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+
+    const staleToday = await Attendance.find({
+      date: today,
+      checkOutTime: null,
+      durationUnknown: false,
+      checkInTime: { $lt: threeHoursAgo },
+    });
+
+    for (const rec of staleToday) {
+      rec.durationUnknown = true;
+      // NOTE: checkOutTime stays null so member CAN still check out
+      await rec.save();
+    }
+
+    if (staleToday.length > 0) {
+      console.log(`⏰ Marked ${staleToday.length} stale check-in(s) as durationUnknown`);
+    }
+
+    // Also close open records from PREVIOUS days (member never came back)
+    const stalePrevious = await Attendance.find({
+      date: { $lt: today },
+      checkOutTime: null,
+    });
+    for (const rec of stalePrevious) {
+      rec.durationUnknown = true;
+      await rec.save();
+    }
+    if (stalePrevious.length > 0) {
+      console.log(`⏰ Closed ${stalePrevious.length} unclosed check-in(s) from previous days`);
+    }
+  } catch (error) {
+    console.error('Auto-close stale check-ins error:', error);
+  }
+});
+
 module.exports = {
   checkExpiredMemberships,
   checkExpiredSubscriptions,
   sendMembershipReminders,
-  calculateLeaderboards
+  calculateLeaderboards,
+  autoCloseStaleCheckIns,
 };
