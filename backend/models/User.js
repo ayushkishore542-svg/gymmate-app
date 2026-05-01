@@ -35,7 +35,9 @@ const userSchema = new mongoose.Schema({
   phone: {
     type: String,
     required: true,
-    unique: true
+    // Not unique — same phone can register multiple owner accounts (e.g. multiple gyms).
+    // Trial-per-phone is enforced separately via the TrialUsage model.
+    // Member phone uniqueness is still enforced at the application level in register/member.
   },
   password: {
     type: String,

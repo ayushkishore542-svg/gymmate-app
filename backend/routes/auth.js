@@ -3,7 +3,9 @@ const router  = express.Router();
 const jwt     = require('jsonwebtoken');
 const QRCode  = require('qrcode');
 const { body, validationResult } = require('express-validator');
-const User = require('../models/User');
+const admin = require('firebase-admin');
+const User       = require('../models/User');
+const TrialUsage = require('../models/TrialUsage');
 
 // Reusable helper — returns 400 if any validation rule failed
 const validate = (req, res) => {
@@ -45,6 +47,45 @@ router.get('/check-id/:loginId', async (req, res) => {
   }
 });
 
+// ── POST /api/auth/verify-phone — verify Firebase ID token from frontend ─────
+// Frontend sends OTP via Firebase SDK, gets idToken, and calls this to confirm.
+router.post('/verify-phone', async (req, res) => {
+  try {
+    const { idToken, phone } = req.body;
+    if (!idToken || !phone) {
+      return res.status(400).json({ message: 'idToken and phone are required' });
+    }
+
+    // Verify token using Firebase Admin SDK
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const tokenPhone = decoded.phone_number; // e.g. "+919876543210"
+
+    // Normalise the phone from the body for comparison
+    const normalizedPhone = phone.trim();
+
+    if (tokenPhone !== normalizedPhone) {
+      return res.status(400).json({ message: 'Phone number does not match the verified token' });
+    }
+
+    return res.json({ verified: true, phone: normalizedPhone });
+  } catch (error) {
+    console.error('[verify-phone]', error.message);
+    return res.status(400).json({ message: 'Phone verification failed', error: error.message });
+  }
+});
+
+// ── GET /api/auth/check-trial/:phone — check if trial is available ───────────
+router.get('/check-trial/:phone', async (req, res) => {
+  try {
+    const phone = decodeURIComponent(req.params.phone).trim();
+    const existing = await TrialUsage.findOne({ phone });
+    return res.json({ trialAvailable: !existing });
+  } catch (error) {
+    console.error('[check-trial]', error.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Generate JWT Token
 const generateToken = (userId, role) => {
   return jwt.sign(
@@ -62,10 +103,24 @@ router.post('/register/owner', [
   body('password').isLength({ min: 6 }).trim(),
   body('gymName').notEmpty().trim().escape(),
   body('phone').notEmpty().trim(),
+  body('idToken').notEmpty().withMessage('Phone verification token is required'),
 ], async (req, res) => {
   if (!validate(req, res)) return;
   try {
-    const { name, loginId, email, phone, password, gymName, referralCode } = req.body;
+    const { name, loginId, email, phone, password, gymName, referralCode, idToken } = req.body;
+
+    // ── Step 1: Verify Firebase phone token ───────────────────────────────
+    let verifiedPhone;
+    try {
+      const decoded = await admin.auth().verifyIdToken(idToken);
+      verifiedPhone = decoded.phone_number; // "+91XXXXXXXXXX"
+      if (verifiedPhone !== phone.trim()) {
+        return res.status(400).json({ message: 'Phone not verified: token phone does not match submitted phone' });
+      }
+    } catch (firebaseErr) {
+      console.error('[register/owner firebase]', firebaseErr.message);
+      return res.status(400).json({ message: 'Phone not verified: invalid or expired token. Please verify your phone again.' });
+    }
 
     // Validate loginId format
     const normalizedLoginId = loginId.trim().toLowerCase();
@@ -79,10 +134,11 @@ router.post('/register/owner', [
       return res.status(400).json({ message: 'This Login ID is already taken' });
     }
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
-    if (existingUser) {
-      return res.status(400).json({ message: 'User already exists with this email or phone' });
+    // Check email uniqueness only — same phone is allowed (owner with multiple gyms).
+    // Trial-per-phone is enforced via TrialUsage below.
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(400).json({ message: 'An account with this email already exists' });
     }
 
     // Generate unique referral code
@@ -95,27 +151,33 @@ router.post('/register/owner', [
     }
 
     // Check if referred by someone
-    let referrer = null;
     if (referralCode) {
-      referrer = await User.findOne({ referralCode: referralCode });
+      await User.findOne({ referralCode });
     }
+
+    // ── Step 2: Check trial abuse — has this phone used a trial before? ───
+    const existingTrial = await TrialUsage.findOne({ phone: verifiedPhone });
+    const trialUsed = !!existingTrial;
 
     // Create owner
     const trialStart = new Date();
-    const trialEnd   = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+    // If trial already used: set end date in the past (no trial period)
+    const trialEnd = trialUsed
+      ? new Date(Date.now() - 1000) // expired immediately
+      : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000); // 15 days
 
     const owner = new User({
       name,
       loginId: normalizedLoginId,
       email,
-      phone,
+      phone: verifiedPhone,
       password,
       role: 'owner',
       gymName,
       referralCode: newReferralCode,
       referredBy: referralCode || null,
       // Subscription
-      subscriptionStatus:    'trial',
+      subscriptionStatus:    trialUsed ? 'expired' : 'trial',
       subscriptionStartDate: trialStart,
       subscriptionEndDate:   trialEnd,
       // Razorpay fields — all null until owner sets up auto-pay
@@ -142,17 +204,24 @@ router.post('/register/owner', [
     owner.gymQRCode = qrCodeDataURL;
     await owner.save();
 
+    // ── Step 3: Record trial usage (only if trial was granted) ───────────
+    if (!trialUsed) {
+      await TrialUsage.create({ phone: verifiedPhone, gymOwnerId: owner._id });
+    }
+
     // Generate token
     const token = generateToken(owner._id, owner.role);
 
     res.status(201).json({
       message: 'Owner registered successfully',
+      trialGranted: !trialUsed,
       token,
       user: {
         id: owner._id,
         name: owner.name,
         loginId: owner.loginId,
         email: owner.email,
+        phone: owner.phone,
         role: owner.role,
         gymName: owner.gymName,
         referralCode: owner.referralCode,
@@ -388,6 +457,17 @@ router.post('/login', [
       responseData.subscriptionEndDate = user.subscriptionEndDate;
       responseData.razorpayShortUrl = user.razorpayShortUrl;
       responseData.paymentMethodAdded = user.paymentMethodAdded;
+
+      // Detect trial used on a DIFFERENT account with the same phone.
+      // Applies when this account has 'expired' status immediately (never had a trial).
+      let trialUsedOnAnotherAccount = false;
+      if (user.subscriptionStatus === 'expired') {
+        const trialRecord = await TrialUsage.findOne({ phone: user.phone });
+        if (trialRecord && trialRecord.gymOwnerId.toString() !== user._id.toString()) {
+          trialUsedOnAnotherAccount = true;
+        }
+      }
+      responseData.trialUsedOnAnotherAccount = trialUsedOnAnotherAccount;
     } else {
       const gymOwner = await User.findById(user.gymOwnerId);
       responseData.loginId = user.loginId;
