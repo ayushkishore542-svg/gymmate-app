@@ -9,6 +9,9 @@ const rateLimit      = require('express-rate-limit');
 const helmet         = require('helmet');
 const mongoSanitize  = require('express-mongo-sanitize');
 
+// Migrations
+const migrateLoginIds = require('./scripts/migrateLoginIds');
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const memberRoutes = require('./routes/members');
@@ -205,8 +208,11 @@ mongoose.connect(process.env.MONGO_URI, {
   retryWrites: true,
   w: 'majority'
 })
-.then(() => {
+.then(async () => {
   console.log('✅ Connected to MongoDB');
+
+  // Run one-time migration: ensure all users have a loginId
+  await migrateLoginIds();
 
   // Start cron jobs
   console.log('🕐 Starting cron jobs...');

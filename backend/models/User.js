@@ -17,9 +17,20 @@ const userSchema = new mongoose.Schema({
   loginId: {
     type: String,
     unique: true,
-    sparse: true, // only members have a loginId; sparse allows owners to omit it
+    sparse: true,   // sparse keeps backward-compat for docs created before this field existed
     trim: true,
-    lowercase: true
+    lowercase: true,
+    minlength: 4,
+    maxlength: 20,
+    index: true,
+    validate: {
+      validator: function(v) {
+        // Allow null/undefined (sparse) but validate format when present
+        if (!v) return true;
+        return /^[a-z][a-z0-9._]{3,19}$/.test(v);
+      },
+      message: 'Login ID must be 4-20 characters, start with a letter, and only contain lowercase letters, numbers, dots, or underscores.'
+    }
   },
   phone: {
     type: String,

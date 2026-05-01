@@ -15,6 +15,36 @@ const validate = (req, res) => {
   return true;
 };
 
+// Login ID validation regex: 4-20 chars, starts with letter, lowercase letters/numbers/dots/underscores
+const LOGIN_ID_REGEX = /^[a-z][a-z0-9._]{3,19}$/;
+
+const validateLoginIdFormat = (loginId) => LOGIN_ID_REGEX.test(loginId);
+
+// ── GET /api/auth/check-id/:loginId — real-time availability check ───────────
+router.get('/check-id/:loginId', async (req, res) => {
+  try {
+    const raw = req.params.loginId.trim().toLowerCase();
+
+    // Validate format first
+    if (!validateLoginIdFormat(raw)) {
+      return res.status(200).json({
+        available: false,
+        message: 'Must be 4-20 characters, start with a letter, use only letters/numbers/./_ '
+      });
+    }
+
+    const existing = await User.findOne({ loginId: raw });
+    if (existing) {
+      return res.status(200).json({ available: false, message: 'Already taken' });
+    }
+
+    return res.status(200).json({ available: true, message: 'Available!' });
+  } catch (error) {
+    console.error('[Check ID]', error);
+    res.status(500).json({ available: false, message: 'Server error' });
+  }
+});
+
 // Generate JWT Token
 const generateToken = (userId, role) => {
   return jwt.sign(
@@ -27,6 +57,7 @@ const generateToken = (userId, role) => {
 // Register Owner
 router.post('/register/owner', [
   body('name').notEmpty().trim().escape(),
+  body('loginId').notEmpty().trim(),
   body('email').isEmail().normalizeEmail().trim(),
   body('password').isLength({ min: 6 }).trim(),
   body('gymName').notEmpty().trim().escape(),
@@ -34,7 +65,19 @@ router.post('/register/owner', [
 ], async (req, res) => {
   if (!validate(req, res)) return;
   try {
-    const { name, email, phone, password, gymName, referralCode } = req.body;
+    const { name, loginId, email, phone, password, gymName, referralCode } = req.body;
+
+    // Validate loginId format
+    const normalizedLoginId = loginId.trim().toLowerCase();
+    if (!validateLoginIdFormat(normalizedLoginId)) {
+      return res.status(400).json({ message: 'Invalid Login ID format. Use 4-20 characters, start with a letter, only letters/numbers/./_ allowed.' });
+    }
+
+    // Check loginId uniqueness (globally across owners + members)
+    const existingLoginId = await User.findOne({ loginId: normalizedLoginId });
+    if (existingLoginId) {
+      return res.status(400).json({ message: 'This Login ID is already taken' });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
@@ -63,6 +106,7 @@ router.post('/register/owner', [
 
     const owner = new User({
       name,
+      loginId: normalizedLoginId,
       email,
       phone,
       password,
@@ -107,6 +151,7 @@ router.post('/register/owner', [
       user: {
         id: owner._id,
         name: owner.name,
+        loginId: owner.loginId,
         email: owner.email,
         role: owner.role,
         gymName: owner.gymName,
@@ -160,12 +205,13 @@ router.post('/register/member', [
     if (!loginId) {
       return res.status(400).json({ message: 'Login ID is required' });
     }
-    if (!/^[a-zA-Z0-9]{4,}$/.test(loginId)) {
-      return res.status(400).json({ message: 'Login ID must be alphanumeric and at least 4 characters' });
+    const normalizedMemberLoginId = loginId.trim().toLowerCase();
+    if (!validateLoginIdFormat(normalizedMemberLoginId)) {
+      return res.status(400).json({ message: 'Invalid Login ID format. Use 4-20 characters, start with a letter, only letters/numbers/./_ allowed.' });
     }
 
-    // Check loginId uniqueness
-    const existingLoginId = await User.findOne({ loginId: loginId.toLowerCase() });
+    // Check loginId uniqueness globally (owners + members share the same namespace)
+    const existingLoginId = await User.findOne({ loginId: normalizedMemberLoginId });
     if (existingLoginId) {
       return res.status(400).json({ message: 'Login ID is already taken' });
     }
@@ -210,7 +256,7 @@ router.post('/register/member', [
       ...(email && { email }),
       phone,
       password,
-      loginId: loginId.toLowerCase(),
+      loginId: normalizedMemberLoginId,
       role: 'member',
       gymOwnerId,
       referralCode: newReferralCode,
@@ -275,19 +321,31 @@ router.post('/login', [
   try {
     const { email, loginId, password, role } = req.body;
 
-    // Single identifier string used in audit logs (members use loginId, owners use email)
-    const identifier = role === 'member' ? loginId : email;
+    // Determine the single identifier used for lookup and audit logs.
+    // Both owners and members now log in with loginId.
+    // Fallback: if the identifier contains '@' treat it as email (backward compat).
+    const rawIdentifier = loginId || email || '';
+    const identifier = rawIdentifier.trim();
     const ts = () => new Date().toISOString();
 
-    // Find user — owners log in with email, members log in with loginId
+    // Find user
     let user;
     if (role === 'member') {
-      if (!loginId) {
-        return res.status(400).json({ message: 'Login ID is required for members' });
+      if (!identifier) {
+        return res.status(400).json({ message: 'Login ID is required' });
       }
-      user = await User.findOne({ loginId: loginId.toLowerCase(), role });
+      user = await User.findOne({ loginId: identifier.toLowerCase(), role });
     } else {
-      user = await User.findOne({ email, role });
+      // Owner: prefer loginId lookup; fall back to email if identifier looks like one
+      if (!identifier) {
+        return res.status(400).json({ message: 'Login ID is required' });
+      }
+      if (identifier.includes('@')) {
+        // Legacy email login
+        user = await User.findOne({ email: identifier.toLowerCase(), role });
+      } else {
+        user = await User.findOne({ loginId: identifier.toLowerCase(), role });
+      }
     }
 
     if (!user) {
@@ -323,6 +381,7 @@ router.post('/login', [
     };
 
     if (user.role === 'owner') {
+      responseData.loginId = user.loginId;
       responseData.gymName = user.gymName;
       responseData.gymQRCode = user.gymQRCode;
       responseData.subscriptionStatus = user.subscriptionStatus;
