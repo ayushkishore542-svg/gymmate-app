@@ -1,6 +1,13 @@
 const dotenv    = require('dotenv');
 dotenv.config({ path: __dirname + '/.env' });
 
+// ── Firebase Admin SDK (must initialise before any route that uses admin.auth()) ──
+const admin = require('firebase-admin');
+if (!admin.apps.length) {
+  const serviceAccount = require('./firebase-service-account.json');
+  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
+
 const express        = require('express');
 const mongoose       = require('mongoose');
 const cors           = require('cors');
@@ -32,6 +39,7 @@ const batchRoutes         = require('./routes/batches');
 const inventoryRoutes     = require('./routes/inventory');
 const feedbackRoutes      = require('./routes/feedback');
 const referralRoutes      = require('./routes/referrals');
+const walletRoutes        = require('./routes/wallet');
 const supportRoutes       = require('./routes/support');
 
 // Calorie Tracker routes
@@ -51,6 +59,7 @@ const {
   sendMembershipReminders,
   calculateLeaderboards,
   autoCloseStaleCheckIns,
+  expireWalletCredits,
 } = require('./utils/cronJobs');
 
 // Initialize app
@@ -164,7 +173,8 @@ app.use('/api/workout-plans',  authMiddleware, subscriptionGuard, workoutPlanRou
 app.use('/api/batches',        authMiddleware, subscriptionGuard, batchRoutes);
 app.use('/api/inventory',      authMiddleware, subscriptionGuard, inventoryRoutes);
 app.use('/api/feedback',       authMiddleware, subscriptionGuard, feedbackRoutes);
-app.use('/api/referrals',      authMiddleware, subscriptionGuard, referralRoutes);
+app.use('/api/referrals',      referralRoutes);   // validate is public; individual routes do own auth
+app.use('/api/wallet',         authMiddleware, walletRoutes);
 app.use('/api/support',        authMiddleware, subscriptionGuard, supportRoutes);
 
 // ── Member feature routes (auth only, no subscription guard — member-side) ───
@@ -221,6 +231,7 @@ mongoose.connect(process.env.MONGO_URI, {
   sendMembershipReminders.start();
   calculateLeaderboards.start();
   autoCloseStaleCheckIns.start();
+  expireWalletCredits.start();
   console.log('✅ Cron jobs started');
 })
 .catch((err) => {
@@ -250,9 +261,4 @@ if (process.env.NODE_ENV === 'production') {
 
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 GymMate server running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
-
-module.exports = app;
+a

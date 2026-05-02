@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
+const Wallet = require('../models/Wallet');
 const { calculateForGym } = require('../routes/calorieLeaderboard');
 
 // Check and update expired memberships - runs daily at midnight
@@ -172,10 +173,49 @@ const autoCloseStaleCheckIns = cron.schedule('*/30 * * * *', async () => {
   }
 });
 
+// Zero-out expired wallet credit balance -- runs daily at 1 AM
+const expireWalletCredits = cron.schedule('0 1 * * *', async () => {
+  try {
+    console.log('Checking expired wallet credits...');
+    const now = new Date();
+
+    // Find all wallets that have at least one credit transaction that has expired
+    const wallets = await Wallet.find({
+      'transactions.type': 'credit',
+      'transactions.expiresAt': { $lt: now },
+    });
+
+    let updated = 0;
+    for (const wallet of wallets) {
+      const hadExpired = wallet.transactions.some(
+        t => t.type === 'credit' && t.expiresAt && new Date(t.expiresAt) < now
+      );
+      if (hadExpired) {
+        const oldBalance = wallet.balance;
+        wallet.recomputeBalance();
+        if (wallet.balance !== oldBalance) {
+          await wallet.save();
+          updated++;
+          console.log(
+            'Wallet expired credits zeroed for userId:',
+            wallet.userId,
+            '| Old balance:', oldBalance,
+            '| New balance:', wallet.balance
+          );
+        }
+      }
+    }
+    console.log('Expired wallet credits processed for ' + updated + ' wallets');
+  } catch (err) {
+    console.error('Error expiring wallet credits:', err);
+  }
+});
+
 module.exports = {
   checkExpiredMemberships,
   checkExpiredSubscriptions,
   sendMembershipReminders,
   calculateLeaderboards,
   autoCloseStaleCheckIns,
+  expireWalletCredits,
 };
