@@ -1,13 +1,15 @@
 const express  = require('express');
 const router   = express.Router();
 const User     = require('../models/User');
+const ProcessedWebhook = require('../models/ProcessedWebhook');
 const { verifyWebhookSignature } = require('../services/razorpayService');
+const { logger } = require('../utils/logger');
 
-// ─── GET /api/webhooks/razorpay/ping ────────────────────────────────────────
-// Simple health check to confirm the webhook route is reachable by Razorpay.
-// Test: curl https://gymmate-app-production.up.railway.app/api/webhooks/razorpay/ping
 router.get('/razorpay/ping', (req, res) => {
-  console.log('[Webhook] PING received from', req.ip, 'at', new Date().toISOString());
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ message: 'Not found' });
+  }
+  logger.info('webhook_ping', { ip: req.ip });
   res.status(200).json({ ok: true, time: new Date().toISOString() });
 });
 
@@ -20,45 +22,23 @@ router.get('/razorpay/ping', (req, res) => {
 // ────────────────────────────────────────────────────────────────────────────
 
 router.post('/razorpay', async (req, res) => {
-  // ── VERBOSE ENTRY LOGGING (pre-validation) ────────────────────────────────
-  console.log('─────────────────────────────────────────────────────────');
-  console.log('🔔 [WEBHOOK] Request received at', new Date().toISOString());
-  console.log('🔔 [WEBHOOK] Method:', req.method, '| IP:', req.ip);
-  console.log('🔔 [WEBHOOK] Headers:', JSON.stringify({
-    'content-type':        req.headers['content-type'],
-    'x-razorpay-signature': req.headers['x-razorpay-signature']
-      ? req.headers['x-razorpay-signature'].substring(0, 20) + '…'
-      : 'MISSING',
-    'user-agent': req.headers['user-agent'],
-  }, null, 2));
-  console.log('🔔 [WEBHOOK] req.rawBody type:', typeof req.rawBody,
-    '| is Buffer:', Buffer.isBuffer(req.rawBody),
-    '| length:', req.rawBody ? req.rawBody.length : 'N/A');
-  console.log('🔔 [WEBHOOK] RAZORPAY_WEBHOOK_SECRET set?',
-    process.env.RAZORPAY_WEBHOOK_SECRET ? 'YES (len=' + process.env.RAZORPAY_WEBHOOK_SECRET.length + ')' : 'NO ❌');
-  console.log('─────────────────────────────────────────────────────────');
-
   const signature = req.headers['x-razorpay-signature'];
 
   // ── 1. Verify signature ───────────────────────────────────────────────────
   const rawBody = req.rawBody; // set by express.raw() in server.js
   if (!rawBody) {
-    console.error('❌ [WEBHOOK] rawBody missing — check server.js middleware order');
+    logger.error('webhook_rawbody_missing');
     return res.status(400).json({ message: 'Bad request: missing body' });
   }
 
   if (!signature) {
-    console.error('❌ [WEBHOOK] x-razorpay-signature header missing');
+    logger.warn('webhook_signature_header_missing', { ip: req.ip });
     return res.status(400).json({ message: 'Bad request: missing signature' });
   }
 
   const isValid = verifyWebhookSignature(rawBody, signature);
-  console.log('🔔 [WEBHOOK] Signature valid?', isValid ? 'YES ✅' : 'NO ❌');
   if (!isValid) {
-    console.warn('❌ [WEBHOOK] Invalid signature — rejecting. Secret used (first 5 chars):',
-      process.env.RAZORPAY_WEBHOOK_SECRET
-        ? process.env.RAZORPAY_WEBHOOK_SECRET.substring(0, 5)
-        : 'NOT SET');
+    logger.warn('webhook_invalid_signature', { ip: req.ip });
     return res.status(400).json({ message: 'Invalid signature' });
   }
 
@@ -73,9 +53,20 @@ router.post('/razorpay', async (req, res) => {
   const eventType = event.event;
   const payload   = event.payload;
 
-  console.log(`✅ [WEBHOOK] Event parsed: "${eventType}"`);
-  const subId = payload?.subscription?.entity?.id || payload?.payment?.entity?.subscription_id || 'N/A';
-  console.log(`✅ [WEBHOOK] Subscription ID in payload: ${subId}`);
+  const dedupeKey = event.id
+    ? String(event.id)
+    : `${eventType}_${event.created_at || Date.now()}`;
+  try {
+    await ProcessedWebhook.create({ dedupeKey, eventType });
+  } catch (e) {
+    if (e.code === 11000) {
+      logger.info('webhook_duplicate_ignored', { dedupeKey, eventType });
+      return res.status(200).json({ received: true, duplicate: true });
+    }
+    throw e;
+  }
+
+  logger.info('webhook_event', { eventType, dedupeKey });
 
   // ── 3. Dispatch ───────────────────────────────────────────────────────────
   try {
@@ -88,14 +79,14 @@ router.post('/razorpay', async (req, res) => {
         if (!subId) break;
 
         const user = await User.findOne({ razorpaySubscriptionId: subId });
-        if (!user) { console.warn(`[Webhook] No user for subscription ${subId}`); break; }
+        if (!user) { logger.warn('webhook_no_user', { subId }); break; }
 
         user.subscriptionStatus  = 'active';
         user.paymentMethodAdded  = true;
         user.currentPeriodStart  = sub.current_start ? new Date(sub.current_start * 1000) : null;
         user.currentPeriodEnd    = sub.current_end   ? new Date(sub.current_end   * 1000) : null;
         await user.save();
-        console.log(`[Webhook] Subscription ACTIVATED for owner ${user._id} (${user.gymName})`);
+        logger.info('webhook_subscription_activated', { userId: String(user._id) });
         break;
       }
 
@@ -107,7 +98,7 @@ router.post('/razorpay', async (req, res) => {
         if (!subId) break;
 
         const user = await User.findOne({ razorpaySubscriptionId: subId });
-        if (!user) { console.warn(`[Webhook] No user for subscription ${subId}`); break; }
+        if (!user) { logger.warn('webhook_no_user', { subId }); break; }
 
         user.subscriptionStatus = 'active';
         user.lastPaymentAt      = new Date();
@@ -116,7 +107,7 @@ router.post('/razorpay', async (req, res) => {
         user.currentPeriodEnd   = sub.current_end   ? new Date(sub.current_end   * 1000) : user.currentPeriodEnd;
         user.paymentMethodAdded = true;
         await user.save();
-        console.log(`[Webhook] Subscription CHARGED for owner ${user._id} — ₹${(pmt?.amount || 0) / 100}`);
+        logger.info('webhook_subscription_charged', { userId: String(user._id) });
         break;
       }
 
@@ -131,7 +122,7 @@ router.post('/razorpay', async (req, res) => {
 
         user.subscriptionStatus = 'halted'; // Razorpay will retry payment
         await user.save();
-        console.log(`[Webhook] Subscription HALTED for owner ${user._id} — payment retries in progress`);
+        logger.info('webhook_subscription_halted', { userId: String(user._id) });
         break;
       }
 
@@ -146,14 +137,14 @@ router.post('/razorpay', async (req, res) => {
 
         user.subscriptionStatus = 'cancelled';
         await user.save();
-        console.log(`[Webhook] Subscription CANCELLED for owner ${user._id}`);
+        logger.info('webhook_subscription_cancelled', { userId: String(user._id) });
         break;
       }
 
       // ── payment.captured ────────────────────────────────────────────────
       case 'payment.captured': {
         const pmt = payload?.payment?.entity;
-        console.log(`[Webhook] Payment CAPTURED: ${pmt?.id} — ₹${(pmt?.amount || 0) / 100}`);
+        logger.info('webhook_payment_captured', { paymentId: pmt?.id });
         // Subscription charged event handles the DB update; this is just a log.
         break;
       }
@@ -162,7 +153,7 @@ router.post('/razorpay', async (req, res) => {
       case 'payment.failed': {
         const pmt   = payload?.payment?.entity;
         const subId = pmt?.subscription_id;
-        console.warn(`[Webhook] Payment FAILED: ${pmt?.id} for subscription ${subId}`);
+        logger.warn('webhook_payment_failed', { paymentId: pmt?.id, subId });
 
         if (subId) {
           const user = await User.findOne({ razorpaySubscriptionId: subId });
@@ -176,11 +167,10 @@ router.post('/razorpay', async (req, res) => {
       }
 
       default:
-        console.log(`[Webhook] Unhandled event type: ${eventType}`);
+        logger.info('webhook_unhandled', { eventType });
     }
   } catch (err) {
-    console.error(`[Webhook] Error processing ${eventType}:`, err);
-    // Still return 200 so Razorpay doesn't retry indefinitely
+    logger.error('webhook_dispatch_error', { eventType, err: err.message });
   }
 
   res.status(200).json({ received: true });

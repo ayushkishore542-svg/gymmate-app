@@ -5,6 +5,13 @@ const Referral = require('../models/Referral');
 const Wallet   = require('../models/Wallet');
 const User     = require('../models/User');
 const auth     = require('../middleware/auth');
+const { logger } = require('../utils/logger');
+
+function assertSelfUserId(req, userId) {
+  if (!mongoose.Types.ObjectId.isValid(userId)) return { ok: false, status: 400, message: 'Invalid userId' };
+  if (req.user._id.toString() !== userId) return { ok: false, status: 403, message: 'Access denied' };
+  return { ok: true };
+}
 
 // Reward amounts
 const OWNER_REWARD  = 250; // ₹250 to code-owner when an owner uses their code
@@ -15,9 +22,8 @@ const MEMBER_REWARD = 20;  // ₹20  to code-owner when a member uses their code
 router.get('/my-code/:userId', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: 'Invalid userId' });
-    }
+    const gate = assertSelfUserId(req, userId);
+    if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -45,9 +51,8 @@ router.get('/my-code/:userId', auth, async (req, res) => {
 router.get('/earnings/:userId', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: 'Invalid userId' });
-    }
+    const gate = assertSelfUserId(req, userId);
+    if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
 
     const ref = await Referral.findOne({ ownerId: userId })
       .populate('usedBy.userId', 'name loginId gymName role');
@@ -80,7 +85,7 @@ router.get('/earnings/:userId', auth, async (req, res) => {
 // NOTE: No auth required — called during registration flow
 router.post('/validate', async (req, res) => {
   try {
-    const { code, userId, userType } = req.body;
+    const { code, userType } = req.body;
     if (!code) return res.status(400).json({ message: 'Code required' });
 
     const ref = await Referral.findOne({ code: code.toUpperCase().trim() })
@@ -90,17 +95,29 @@ router.post('/validate', async (req, res) => {
       return res.json({ valid: false, message: 'Invalid referral code' });
     }
 
-    // Check if same userId already used this exact code
-    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+    let trustedUserId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const { verifyAccessToken } = require('../utils/jwtAccess');
+        const out = verifyAccessToken(authHeader.split(' ')[1]);
+        if (!out.expired && out.decoded && out.decoded._id) {
+          trustedUserId = out.decoded._id.toString();
+        }
+      } catch {
+        /* ignore invalid token */
+      }
+    }
+
+    if (trustedUserId && mongoose.Types.ObjectId.isValid(trustedUserId)) {
       const alreadyUsed = ref.usedBy.some(
-        u => u.userId.toString() === userId.toString()
+        (u) => u.userId.toString() === trustedUserId
       );
       if (alreadyUsed) {
         return res.json({ valid: false, message: 'You have already used this code' });
       }
     }
 
-    // Discount depends on who is using: owner = ₹250, member = ₹20
     const discountAmount = (userType === 'member') ? MEMBER_REWARD : OWNER_REWARD;
 
     res.json({
@@ -121,12 +138,12 @@ router.post('/validate', async (req, res) => {
 // Body: { code, userId, userType, paymentId }
 router.post('/apply', auth, async (req, res) => {
   try {
-    const { code, userId, userType, paymentId } = req.body;
-    if (!code || !userId || !userType) {
-      return res.status(400).json({ message: 'code, userId, userType required' });
-    }
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: 'Invalid userId' });
+    const { code, paymentId } = req.body;
+    const userId = req.user._id.toString();
+    const userType = req.user.role;
+
+    if (!code) {
+      return res.status(400).json({ message: 'code required' });
     }
 
     const ref = await Referral.findOne({ code: code.toUpperCase().trim() })
@@ -164,6 +181,8 @@ router.post('/apply', auth, async (req, res) => {
 
     ref.totalEarned += rewardAmount;
     await ref.save();
+
+    logger.info('referral_apply', { code: ref.code, userId, userType, ip: req.ip, paymentId });
 
     // Credit the code owner's wallet
     const ownerWallet = await Wallet.getOrCreate(

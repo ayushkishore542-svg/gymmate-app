@@ -1,11 +1,17 @@
 const express = require('express');
 const router  = express.Router();
-const jwt     = require('jsonwebtoken');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const QRCode  = require('qrcode');
 const { body, validationResult } = require('express-validator');
 const admin = require('firebase-admin');
 const User       = require('../models/User');
 const TrialUsage = require('../models/TrialUsage');
+const authMiddleware = require('../middleware/auth');
+const { signAccessToken, verifyAccessToken } = require('../utils/jwtAccess');
+const { issueRefreshToken, rotateRefreshToken, revokeAllForUser } = require('../utils/refreshTokenService');
+const { normalizeIndianE164 } = require('../utils/phoneNormalize');
+const { validatePasswordStrength } = require('../utils/passwordPolicy');
+const { logger } = require('../utils/logger');
 
 // Reusable helper — returns 400 if any validation rule failed
 const validate = (req, res) => {
@@ -21,6 +27,33 @@ const validate = (req, res) => {
 const LOGIN_ID_REGEX = /^[a-z][a-z0-9._]{3,19}$/;
 
 const validateLoginIdFormat = (loginId) => LOGIN_ID_REGEX.test(loginId);
+
+const verifyPhoneLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const phone = (req.body && req.body.phone) ? String(req.body.phone) : '';
+    return `${ipKeyGenerator(req, res)}:${phone}`;
+  },
+  handler: (req, res, _next, options) => {
+    logger.warn('rate_limit', { action: 'verify_phone', ip: req.ip });
+    res.set('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+    res.status(429).json({ message: 'Too many verification attempts for this number' });
+  },
+});
+
+const refreshTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res, _next, options) => {
+    res.set('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+    res.status(429).json({ message: 'Too many refresh attempts' });
+  },
+});
 
 // ── GET /api/auth/check-id/:loginId — real-time availability check ───────────
 router.get('/check-id/:loginId', async (req, res) => {
@@ -42,83 +75,121 @@ router.get('/check-id/:loginId', async (req, res) => {
 
     return res.status(200).json({ available: true, message: 'Available!' });
   } catch (error) {
-    console.error('[Check ID]', error);
+    logger.error('Check ID', { err: error.message });
     res.status(500).json({ available: false, message: 'Server error' });
   }
 });
 
 // ── POST /api/auth/verify-phone — verify Firebase ID token from frontend ─────
 // Frontend sends OTP via Firebase SDK, gets idToken, and calls this to confirm.
-router.post('/verify-phone', async (req, res) => {
+router.post('/verify-phone', verifyPhoneLimiter, async (req, res) => {
   try {
-    const { idToken, phone } = req.body;
-    if (!idToken || !phone) {
-      return res.status(400).json({ message: 'idToken and phone are required' });
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ message: 'idToken is required' });
     }
 
-    // Verify token using Firebase Admin SDK
-    const decoded = await admin.auth().verifyIdToken(idToken);
-    const tokenPhone = decoded.phone_number; // e.g. "+919876543210"
-
-    // Normalise the phone from the body for comparison
-    const normalizedPhone = phone.trim();
-
-    if (tokenPhone !== normalizedPhone) {
-      return res.status(400).json({ message: 'Phone number does not match the verified token' });
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(idToken);
+    } catch (firebaseErr) {
+      logger.warn('verify-phone firebase', { err: firebaseErr.message });
+      return res.status(400).json({ message: 'Phone verification failed: invalid or expired token' });
     }
 
-    return res.json({ verified: true, phone: normalizedPhone });
+    const tokenPhone = decoded.phone_number;
+    if (!tokenPhone) {
+      return res.status(400).json({ message: 'Verified token has no phone number' });
+    }
+
+    const canonical = normalizeIndianE164(tokenPhone) || tokenPhone.trim();
+
+    return res.json({ verified: true, phone: canonical });
   } catch (error) {
-    console.error('[verify-phone]', error.message);
-    return res.status(400).json({ message: 'Phone verification failed', error: error.message });
+    logger.error('verify-phone', { err: error.message });
+    return res.status(400).json({ message: 'Phone verification failed' });
   }
 });
 
 // ── GET /api/auth/check-trial/:phone — check if trial is available ───────────
 router.get('/check-trial/:phone', async (req, res) => {
   try {
-    const phone = decodeURIComponent(req.params.phone).trim();
+    const raw = decodeURIComponent(req.params.phone).trim();
+    const phone = normalizeIndianE164(raw) || raw;
+    if (!phone.startsWith('+91') || phone.length < 13) {
+      return res.status(400).json({ message: 'Invalid phone number' });
+    }
     const existing = await TrialUsage.findOne({ phone });
     return res.json({ trialAvailable: !existing });
   } catch (error) {
-    console.error('[check-trial]', error.message);
+    logger.error('check-trial', { err: error.message });
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Generate JWT Token
-const generateToken = (userId, role) => {
-  return jwt.sign(
-    { _id: userId, role },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-};
+// ── POST /api/auth/refresh-token — rotate refresh token, issue new access JWT ─
+router.post('/refresh-token', refreshTokenLimiter, async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ message: 'refreshToken is required' });
+    }
+    const { plain: newRefresh, userId } = await rotateRefreshToken(refreshToken, {
+      ip: req.ip,
+      userAgent: req.get('user-agent') || '',
+    });
+    const user = await User.findById(userId).select('-password');
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: 'User not found or inactive' });
+    }
+    const token = signAccessToken({ _id: user._id, role: user.role });
+    return res.json({ token, refreshToken: newRefresh });
+  } catch (e) {
+    const status = e.status || 401;
+    return res.status(status).json({ message: e.message || 'Invalid refresh token' });
+  }
+});
 
 // Register Owner
 router.post('/register/owner', [
   body('name').notEmpty().trim().escape(),
   body('loginId').notEmpty().trim(),
   body('email').isEmail().normalizeEmail().trim(),
-  body('password').isLength({ min: 6 }).trim(),
+  body('password').isLength({ min: 8 }).trim(),
+  body('password').custom((v) => {
+    const r = validatePasswordStrength(v);
+    if (!r.ok) throw new Error(r.message);
+    return true;
+  }),
   body('gymName').notEmpty().trim().escape(),
-  body('phone').notEmpty().trim(),
+  body('phone').optional().trim(),
   body('idToken').notEmpty().withMessage('Phone verification token is required'),
 ], async (req, res) => {
   if (!validate(req, res)) return;
   try {
     const { name, loginId, email, phone, password, gymName, referralCode, idToken } = req.body;
 
+    const pwdCheck = validatePasswordStrength(password);
+    if (!pwdCheck.ok) {
+      return res.status(400).json({ message: pwdCheck.message });
+    }
+
     // ── Step 1: Verify Firebase phone token ───────────────────────────────
     let verifiedPhone;
     try {
       const decoded = await admin.auth().verifyIdToken(idToken);
-      verifiedPhone = decoded.phone_number; // "+91XXXXXXXXXX"
-      if (verifiedPhone !== phone.trim()) {
-        return res.status(400).json({ message: 'Phone not verified: token phone does not match submitted phone' });
+      if (!decoded.phone_number) {
+        return res.status(400).json({ message: 'Phone not verified: token has no phone' });
+      }
+      verifiedPhone = normalizeIndianE164(decoded.phone_number) || decoded.phone_number.trim();
+      if (phone) {
+        const bodyPhone = normalizeIndianE164(phone.trim());
+        if (bodyPhone && bodyPhone !== verifiedPhone) {
+          return res.status(400).json({ message: 'Phone not verified: token phone does not match submitted phone' });
+        }
       }
     } catch (firebaseErr) {
-      console.error('[register/owner firebase]', firebaseErr.message);
+      logger.warn('register/owner firebase', { err: firebaseErr.message });
       return res.status(400).json({ message: 'Phone not verified: invalid or expired token. Please verify your phone again.' });
     }
 
@@ -209,13 +280,17 @@ router.post('/register/owner', [
       await TrialUsage.create({ phone: verifiedPhone, gymOwnerId: owner._id });
     }
 
-    // Generate token
-    const token = generateToken(owner._id, owner.role);
+    const token = signAccessToken({ _id: owner._id, role: owner.role });
+    const { plain: refreshToken } = await issueRefreshToken(owner._id, {
+      ip: req.ip,
+      userAgent: req.get('user-agent') || '',
+    });
 
     res.status(201).json({
       message: 'Owner registered successfully',
       trialGranted: !trialUsed,
       token,
+      refreshToken,
       user: {
         id: owner._id,
         name: owner.name,
@@ -232,29 +307,37 @@ router.post('/register/owner', [
     });
 
   } catch (error) {
-    console.error('Register owner error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Register owner error', { err: error.message });
+    res.status(500).json({ message: process.env.NODE_ENV === 'production' ? 'Server error' : error.message });
   }
 });
 
-// Register Member (by gym owner)
-router.post('/register/member', [
+// Register Member (by gym owner — must be authenticated as owner)
+router.post('/register/member', authMiddleware, [
   body('name').notEmpty().trim().escape(),
   body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail().trim(),
-  body('password').isLength({ min: 6 }).trim(),
+  body('password').isLength({ min: 8 }).trim(),
+  body('password').custom((v) => {
+    const r = validatePasswordStrength(v);
+    if (!r.ok) throw new Error(r.message);
+    return true;
+  }),
   body('loginId').notEmpty().trim(),
-  body('gymOwnerId').notEmpty().trim(),
   body('phone').notEmpty().trim(),
 ], async (req, res) => {
   if (!validate(req, res)) return;
   try {
+    if (req.user.role !== 'owner') {
+      return res.status(403).json({ message: 'Only gym owners can register members' });
+    }
+    const gymOwnerId = req.user._id.toString();
+
     const {
       name,
       email,
       phone,
       password,
       loginId,
-      gymOwnerId,
       membershipFee,
       membershipDuration,
       membershipPlan,
@@ -285,14 +368,13 @@ router.post('/register/member', [
       return res.status(400).json({ message: 'Login ID is already taken' });
     }
 
-    // Verify gym owner exists
     const gymOwner = await User.findById(gymOwnerId);
     if (!gymOwner || gymOwner.role !== 'owner') {
       return res.status(400).json({ message: 'Invalid gym owner' });
     }
 
-    // phone is globally unique in the schema — check across all users first
-    const existingPhone = await User.findOne({ phone });
+    const memberPhone = normalizeIndianE164(phone.trim()) || phone.trim();
+    const existingPhone = await User.findOne({ phone: memberPhone });
     if (existingPhone) {
       return res.status(400).json({ message: 'Phone number is already registered' });
     }
@@ -323,7 +405,7 @@ router.post('/register/member', [
     const member = new User({
       name,
       ...(email && { email }),
-      phone,
+      phone: memberPhone,
       password,
       loginId: normalizedMemberLoginId,
       role: 'member',
@@ -339,12 +421,16 @@ router.post('/register/member', [
 
     await member.save();
 
-    // Generate token
-    const token = generateToken(member._id, member.role);
+    const token = signAccessToken({ _id: member._id, role: member.role });
+    const { plain: refreshToken } = await issueRefreshToken(member._id, {
+      ip: req.ip,
+      userAgent: req.get('user-agent') || '',
+    });
 
     res.status(201).json({
       message: 'Member registered successfully',
       token,
+      refreshToken,
       user: {
         id: member._id,
         name: member.name,
@@ -365,7 +451,7 @@ router.post('/register/member', [
     });
 
   } catch (error) {
-    console.error('Register member error:', error);
+    logger.error('Register member error', { err: error.message });
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern || {})[0];
       const messages = {
@@ -375,7 +461,7 @@ router.post('/register/member', [
       };
       return res.status(400).json({ message: messages[field] || 'Duplicate entry — please check your details' });
     }
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ message: process.env.NODE_ENV === 'production' ? 'Server error' : error.message });
   }
 });
 
@@ -383,7 +469,7 @@ router.post('/register/member', [
 router.post('/login', [
   body('email').optional().isEmail().normalizeEmail().trim(),
   body('loginId').optional().trim(),
-  body('password').isLength({ min: 6 }).trim(),
+  body('password').isLength({ min: 1 }).trim(),
   body('role').notEmpty().trim(),
 ], async (req, res) => {
   if (!validate(req, res)) return;
@@ -395,7 +481,6 @@ router.post('/login', [
     // Fallback: if the identifier contains '@' treat it as email (backward compat).
     const rawIdentifier = loginId || email || '';
     const identifier = rawIdentifier.trim();
-    const ts = () => new Date().toISOString();
 
     // Find user
     let user;
@@ -418,26 +503,43 @@ router.post('/login', [
     }
 
     if (!user) {
-      console.warn(`⚠️ Failed login attempt for non-existent user: ${identifier} (${role}) from IP: ${req.ip} at ${ts()}`);
+      logger.warn('login_failed', { reason: 'no_user', identifier, role, ip: req.ip });
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Check password
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      const mins = Math.ceil((user.lockUntil - new Date()) / 60000);
+      return res.status(423).json({ message: `Account locked. Try again in ${mins} minute(s).` });
+    }
+
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
-      console.warn(`⚠️ Failed login attempt (bad password): ${identifier} (${role}) from IP: ${req.ip} at ${ts()}`);
+      user.loginAttempts = (user.loginAttempts || 0) + 1;
+      if (user.loginAttempts >= 5) {
+        user.lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+        user.loginAttempts = 0;
+      }
+      await user.save();
+      logger.warn('login_failed', { reason: 'bad_password', userId: String(user._id), ip: req.ip });
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+
+    user.loginAttempts = 0;
+    user.lockUntil = null;
+    await user.save();
 
     // Check if account is active
     if (!user.isActive) {
       return res.status(403).json({ message: 'Account is deactivated' });
     }
 
-    // Generate token
-    const token = generateToken(user._id, user.role);
+    const token = signAccessToken({ _id: user._id, role: user.role });
+    const { plain: refreshToken } = await issueRefreshToken(user._id, {
+      ip: req.ip,
+      userAgent: req.get('user-agent') || '',
+    });
 
-    console.log(`✅ Successful login: ${identifier} (${user.role}) from IP: ${req.ip} at ${ts()}`);
+    logger.info('login_success', { userId: String(user._id), role: user.role, ip: req.ip });
 
     // Prepare response based on role
     let responseData = {
@@ -484,28 +586,30 @@ router.post('/login', [
     res.json({
       message: 'Login successful',
       token,
+      refreshToken,
       user: responseData
     });
 
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Login error', { err: error.message });
+    res.status(500).json({ message: process.env.NODE_ENV === 'production' ? 'Server error' : error.message });
   }
 });
 
 // Get current user
 router.get('/me', async (req, res) => {
   try {
-    // Extract token from header
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) {
       return res.status(401).json({ message: 'No token provided' });
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-password');
-    
+    const out = verifyAccessToken(token);
+    if (out.expired) {
+      return res.status(401).json({ message: 'Token expired' });
+    }
+    const user = await User.findById(out.decoded._id).select('-password');
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -513,13 +617,12 @@ router.get('/me', async (req, res) => {
     res.json({ user });
 
   } catch (error) {
-    console.error('Get me error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Get me error', { err: error.message });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
 // ── Update Profile ──────────────────────────────────────────────────────────
-const authMiddleware = require('../middleware/auth');
 
 router.put('/update-profile', authMiddleware, async (req, res) => {
   try {
@@ -554,8 +657,9 @@ router.put('/change-password', authMiddleware, async (req, res) => {
     if (!oldPassword || !newPassword) {
       return res.status(400).json({ message: 'Old and new passwords are required' });
     }
-    if (newPassword.length < 6) {
-      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    const pwdCheck = validatePasswordStrength(newPassword);
+    if (!pwdCheck.ok) {
+      return res.status(400).json({ message: pwdCheck.message });
     }
 
     const user = await User.findById(req.user._id);
@@ -566,8 +670,9 @@ router.put('/change-password', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'Current password is incorrect' });
     }
 
-    user.password = newPassword; // pre-save hook will hash it
+    user.password = newPassword;
     await user.save();
+    await revokeAllForUser(user._id);
     res.json({ message: 'Password changed successfully' });
   } catch (err) {
     console.error('[Change password]', err);

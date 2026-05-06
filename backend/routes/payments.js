@@ -4,43 +4,64 @@ const router = express.Router();
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const authMiddleware = require('../middleware/auth');
+const { verifyPaymentCaptureSignature } = require('../services/razorpayService');
+const { logger } = require('../utils/logger');
 
-// Record a payment
+const OWNER_REFERRAL_DISCOUNT = 250;
+
+// Record a payment (owner only — gym membership collections)
 router.post('/', authMiddleware, async (req, res) => {
   try {
-    const { 
-      userId, 
-      paymentType, 
-      amount, 
-      paymentMethod, 
-      periodStart, 
-      periodEnd,
-      notes,
-      gymOwnerId 
-    } = req.body;
+    if (req.user.role !== 'owner') {
+      return res.status(403).json({ message: 'Only gym owners can record payments' });
+    }
 
-    const payment = new Payment({
+    const {
       userId,
       paymentType,
       amount,
       paymentMethod,
-      paymentStatus: 'completed',
       periodStart,
       periodEnd,
       notes,
-      gymOwnerId
+    } = req.body;
+
+    const gymOwnerId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid userId' });
+    }
+    const member = await User.findById(userId).select('role gymOwnerId');
+    if (!member || member.role !== 'member' || member.gymOwnerId.toString() !== gymOwnerId.toString()) {
+      return res.status(403).json({ message: 'Invalid member for this gym' });
+    }
+
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0 || amt > 10_000_000) {
+      return res.status(400).json({ message: 'Invalid amount' });
+    }
+
+    const payment = new Payment({
+      userId,
+      paymentType,
+      amount: amt,
+      paymentMethod: paymentMethod || 'cash',
+      paymentStatus: 'completed',
+      periodStart,
+      periodEnd,
+      notes: notes || '',
+      gymOwnerId,
     });
 
     await payment.save();
 
-    res.status(201).json({ 
-      message: 'Payment recorded successfully', 
-      payment 
+    res.status(201).json({
+      message: 'Payment recorded successfully',
+      payment,
     });
-
   } catch (error) {
-    console.error('Create payment error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Create payment error', { err: error.message });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -48,16 +69,34 @@ router.post('/', authMiddleware, async (req, res) => {
 router.get('/user/:userId', authMiddleware, async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
 
-    const payments = await Payment.find({ userId })
-      .sort({ createdAt: -1 })
-      .populate('gymOwnerId', 'name gymName');
+    if (req.user._id.toString() === userId) {
+      const payments = await Payment.find({ userId })
+        .sort({ createdAt: -1 })
+        .populate('gymOwnerId', 'name gymName')
+        .lean();
+      return res.json({ payments });
+    }
 
-    res.json({ payments });
+    if (req.user.role === 'owner') {
+      const member = await User.findById(userId).select('gymOwnerId role');
+      if (!member || member.role !== 'member' || member.gymOwnerId.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+      const payments = await Payment.find({ userId })
+        .sort({ createdAt: -1 })
+        .populate('gymOwnerId', 'name gymName')
+        .lean();
+      return res.json({ payments });
+    }
 
+    return res.status(403).json({ message: 'Access denied' });
   } catch (error) {
-    console.error('Get user payments error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Get user payments error', { err: error.message });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -69,6 +108,10 @@ router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(ownerId)) {
       return res.status(400).json({ message: 'Invalid owner ID' });
     }
+    if (req.user.role !== 'owner' || req.user._id.toString() !== ownerId) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
 
     const payments = await Payment.find({ gymOwnerId: ownerObjectId })
@@ -95,32 +138,66 @@ router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
 // Process subscription payment for gym owner
 router.post('/subscription', authMiddleware, async (req, res) => {
   try {
-    const { 
-      ownerId, 
-      amount, 
-      paymentMethod, 
+    if (req.user.role !== 'owner') {
+      return res.status(403).json({ message: 'Owners only' });
+    }
+
+    const {
+      ownerId,
+      paymentMethod,
       durationMonths,
-      referralCode 
+      referralCode,
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
     } = req.body;
+
+    if (!ownerId || ownerId !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Invalid owner' });
+    }
 
     const owner = await User.findById(ownerId);
     if (!owner || owner.role !== 'owner') {
       return res.status(400).json({ message: 'Invalid owner' });
     }
 
-    let finalAmount = amount;
+    const baseAmount = Number(owner.subscriptionFee) > 0 ? Number(owner.subscriptionFee) : 699;
+    let finalAmount = baseAmount;
     let discountApplied = 0;
 
-    // Apply referral discount if applicable
-    if (referralCode && owner.referredBy === referralCode) {
-      discountApplied = 200; // Rs. 200 discount
-      finalAmount = amount - discountApplied;
+    const refNorm = referralCode ? String(referralCode).trim().toUpperCase() : '';
+    const ownerRef = owner.referredBy ? String(owner.referredBy).trim().toUpperCase() : '';
+    if (refNorm && ownerRef && refNorm === ownerRef) {
+      discountApplied = OWNER_REFERRAL_DISCOUNT;
+      finalAmount = Math.max(0, baseAmount - discountApplied);
 
-      // Credit referrer
-      const referrer = await User.findOne({ referralCode });
+      const referrer = await User.findOne({ referralCode: ownerRef });
       if (referrer) {
-        referrer.referralEarnings += 200;
+        referrer.referralEarnings += OWNER_REFERRAL_DISCOUNT;
         await referrer.save();
+      }
+    }
+
+    const method = (paymentMethod || 'cash').toLowerCase();
+    if (['upi', 'card', 'razorpay', 'bank_transfer'].includes(method)) {
+      if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+        return res.status(400).json({ message: 'Razorpay order id, payment id, and signature required' });
+      }
+      const ok = verifyPaymentCaptureSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+      if (!ok) {
+        logger.warn('subscription_payment_signature_invalid', { ownerId: String(owner._id), ip: req.ip });
+        return res.status(400).json({ message: 'Invalid payment signature' });
+      }
+      const existing = await Payment.findOne({ externalDedupeKey: razorpayPaymentId });
+      if (existing) {
+        return res.json({
+          message: 'Payment already processed',
+          payment: existing,
+          owner: {
+            subscriptionStatus: owner.subscriptionStatus,
+            subscriptionEndDate: owner.subscriptionEndDate,
+          },
+        });
       }
     }
 
@@ -136,19 +213,28 @@ router.post('/subscription', authMiddleware, async (req, res) => {
     owner.subscriptionEndDate = endDate;
     await owner.save();
 
-    // Create payment record
     const payment = new Payment({
       userId: ownerId,
       paymentType: 'subscription',
       amount: finalAmount,
-      paymentMethod,
+      paymentMethod: method,
       paymentStatus: 'completed',
       periodStart: startDate,
       periodEnd: endDate,
-      discountApplied
+      discountApplied,
+      razorpayOrderId: razorpayOrderId || null,
+      razorpayPaymentId: razorpayPaymentId || null,
+      externalDedupeKey: razorpayPaymentId || null,
     });
 
-    await payment.save();
+    try {
+      await payment.save();
+    } catch (e) {
+      if (e.code === 11000) {
+        return res.status(409).json({ message: 'Duplicate payment' });
+      }
+      throw e;
+    }
 
     res.json({ 
       message: 'Subscription payment processed successfully', 
@@ -160,8 +246,8 @@ router.post('/subscription', authMiddleware, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Process subscription error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Process subscription error', { err: error.message });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -173,6 +259,10 @@ router.get('/gym/:ownerId/stats', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(ownerId)) {
       return res.status(400).json({ message: 'Invalid owner ID' });
     }
+    if (req.user.role !== 'owner' || req.user._id.toString() !== ownerId) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
 
     const { period } = req.query; // 'month', 'year'
@@ -231,6 +321,10 @@ router.get('/summary/:ownerId', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(ownerId)) {
       return res.status(400).json({ message: 'Invalid owner ID' });
     }
+    if (req.user.role !== 'owner' || req.user._id.toString() !== ownerId) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
 
     const now = new Date();
@@ -290,13 +384,26 @@ router.get('/member/:memberId', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(memberId)) {
       return res.status(400).json({ message: 'Invalid member ID' });
     }
+    if (req.user.role === 'member' && req.user._id.toString() !== memberId) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    if (req.user.role === 'owner') {
+      const m = await User.findById(memberId).select('gymOwnerId role');
+      if (!m || m.role !== 'member' || m.gymOwnerId.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    }
+    if (req.user.role !== 'owner' && req.user.role !== 'member') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
     const payments = await Payment.find({ userId: new mongoose.Types.ObjectId(memberId) })
       .sort({ createdAt: -1 })
-      .limit(50);
+      .limit(50)
+      .lean();
     res.json({ payments });
   } catch (error) {
-    console.error('Member payment history error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    logger.error('Member payment history error', { err: error.message });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

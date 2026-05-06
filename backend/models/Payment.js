@@ -55,6 +55,11 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+
+  razorpayOrderId: { type: String, default: null },
+  razorpayPaymentId: { type: String, default: null },
+  /** Idempotency: unique per gateway payment id when present */
+  externalDedupeKey: { type: String, default: null, sparse: true, unique: true },
   
   notes: {
     type: String,

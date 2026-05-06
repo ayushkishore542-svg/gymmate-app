@@ -16,6 +16,7 @@
  */
 
 const User = require('../models/User');
+const { logger } = require('../utils/logger');
 
 module.exports = async function subscriptionGuard(req, res, next) {
   try {
@@ -73,7 +74,7 @@ module.exports = async function subscriptionGuard(req, res, next) {
     });
 
   } catch (err) {
-    console.error('[subscriptionGuard] Error:', err);
-    next(); // fail open — don't block owner if guard itself errors
+    logger.error('subscriptionGuard_error', { err: err.message });
+    return res.status(503).json({ message: 'Service temporarily unavailable' });
   }
 };

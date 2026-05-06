@@ -1,20 +1,30 @@
-const dotenv    = require('dotenv');
-dotenv.config({ path: __dirname + '/.env' });
+const dotenv = require('dotenv');
+dotenv.config({ path: `${__dirname}/.env` });
 
-// ── Firebase Admin SDK (must initialise before any route that uses admin.auth()) ──
-const admin = require('firebase-admin');
-if (!admin.apps.length) {
-  const serviceAccount = require('./firebase-service-account.json');
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+const { validateEnv } = require('./utils/env');
+const { logger } = require('./utils/logger');
+const { initFirebaseAdmin } = require('./utils/firebaseAdmin');
+
+try {
+  validateEnv();
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.error(e.message);
+  process.exit(1);
 }
+
+initFirebaseAdmin();
 
 const express        = require('express');
 const mongoose       = require('mongoose');
 const cors           = require('cors');
 const path           = require('path');
-const rateLimit      = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const helmet         = require('helmet');
 const mongoSanitize  = require('express-mongo-sanitize');
+const hpp            = require('hpp');
+const xss            = require('xss-clean');
+const morgan         = require('morgan');
 
 // Migrations
 const migrateLoginIds = require('./scripts/migrateLoginIds');
@@ -62,8 +72,8 @@ const {
   expireWalletCredits,
 } = require('./utils/cronJobs');
 
-// Initialize app
 const app = express();
+app.set('trust proxy', 1);
 
 // Security headers
 app.use(helmet({
@@ -79,9 +89,10 @@ app.use(helmet({
     maxAge: 31536000,
     includeSubDomains: true,
   },
+  crossOriginEmbedderPolicy: false,
 }));
-
-// Hide Express from response headers
+app.use(helmet.noSniff());
+app.use(helmet.hidePoweredBy());
 app.disable('x-powered-by');
 
 // Allowed origins
@@ -89,9 +100,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://10.44.75.138:3000',
   'https://gymmate-app.vercel.app',
-  // Add production domain when ready:
-  // 'https://yourdomain.com',
-  // 'https://www.yourdomain.com',
+  'https://gymmate-app-production.up.railway.app',
 ];
 
 // Middleware
@@ -117,29 +126,81 @@ app.use('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), (re
   next();
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(mongoSanitize({ replaceWith: '_' }));
+app.use(xss());
+app.use(hpp());
 
-// Rate limiters
+const rateLimitLog = (req, msg) => {
+  logger.warn('rate_limit', { message: msg, ip: req.ip, path: req.originalUrl });
+};
+
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,                  // 100 requests per window
-  message: 'Too many requests, please try again later.',
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) =>
+    req.originalUrl.startsWith('/api/webhooks') ||
+    req.originalUrl === '/api/health',
+  handler: (req, res, _next, options) => {
+    rateLimitLog(req, 'api_general');
+    const retry = Math.ceil(options.windowMs / 1000);
+    res.set('Retry-After', String(retry));
+    res.status(429).json({ message: options.message || 'Too many requests' });
+  },
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,                   // 20 attempts per window
-  message: 'Too many login attempts, try again later.',
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
   skipSuccessfulRequests: true,
+  handler: (req, res, _next, options) => {
+    rateLimitLog(req, 'login');
+    res.set('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+    res.status(429).json({ message: 'Too many login attempts, try again later.' });
+  },
 });
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res, _next, options) => {
+    rateLimitLog(req, 'register');
+    res.set('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+    res.status(429).json({ message: 'Too many registration attempts, try again later.' });
+  },
+});
+
+const paymentLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const uid = req.user && req.user._id ? req.user._id.toString() : 'anon';
+    return `${ipKeyGenerator(req, res)}:${uid}`;
+  },
+  handler: (req, res, _next, options) => {
+    rateLimitLog(req, 'payment');
+    res.set('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+    res.status(429).json({ message: 'Too many payment requests' });
+  },
+});
+
+app.use(morgan('combined', {
+  stream: { write: (line) => logger.info(line.trim()) },
+}));
 
 app.use('/api/', apiLimiter);
-app.use('/api/auth/login',    authLimiter);
-app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/login', loginLimiter);
+app.use('/api/auth/register/owner', registerLimiter);
+app.use('/api/auth/register/member', registerLimiter);
 
 // Middleware references (already required as authMiddleware in routes,
 // but applied globally here for subscriptionGuard)
@@ -160,7 +221,7 @@ app.use('/api/subscriptions', subscriptionRoutes);  // needs auth, but NOT subsc
 // — that's acceptable redundancy vs. refactoring every route.
 app.use('/api/members',    authMiddleware, subscriptionGuard, memberRoutes);
 app.use('/api/attendance', authMiddleware, subscriptionGuard, attendanceRoutes);
-app.use('/api/payments',   authMiddleware, subscriptionGuard, paymentRoutes);
+app.use('/api/payments',   authMiddleware, subscriptionGuard, paymentLimiter, paymentRoutes);
 app.use('/api/visitors',   authMiddleware, subscriptionGuard, visitorRoutes);
 app.use('/api/notices',    authMiddleware, subscriptionGuard, noticeRoutes);
 app.use('/api/dashboard', authMiddleware, subscriptionGuard, dashboardRoutes);
@@ -219,39 +280,33 @@ mongoose.connect(process.env.MONGO_URI, {
   w: 'majority'
 })
 .then(async () => {
-  console.log('✅ Connected to MongoDB');
+  logger.info('Connected to MongoDB');
 
-  // Run one-time migration: ensure all users have a loginId
   await migrateLoginIds();
 
-  // Start cron jobs
-  console.log('🕐 Starting cron jobs...');
+  logger.info('Starting cron jobs');
   checkExpiredMemberships.start();
   checkExpiredSubscriptions.start();
   sendMembershipReminders.start();
   calculateLeaderboards.start();
   autoCloseStaleCheckIns.start();
   expireWalletCredits.start();
-  console.log('✅ Cron jobs started');
+  logger.info('Cron jobs started');
 })
 .catch((err) => {
-  console.error('❌ MongoDB connection error:', err.message);
+  logger.error('MongoDB connection error', { err: err.message });
   process.exit(1);
 });
 
 // Production error handler — hide stack traces from clients
 if (process.env.NODE_ENV === 'production') {
   app.use((err, req, res, next) => {
-    console.error(err.stack); // Log internally only
-    res.status(err.status || 500).json({
-      message: 'Something went wrong',
-      // Never expose error details in production!
-    });
+    logger.error('Unhandled error', { err: err.message, stack: err.stack });
+    res.status(err.status || 500).json({ message: 'Internal server error' });
   });
 } else {
-  // Development — show full errors
   app.use((err, req, res, next) => {
-    console.error(err);
+    logger.error(err.message, { stack: err.stack });
     res.status(err.status || 500).json({
       message: err.message,
       error: err,
@@ -261,4 +316,8 @@ if (process.env.NODE_ENV === 'production') {
 
 // Start server
 const PORT = process.env.PORT || 5000;
-a
+app.listen(PORT, () => {
+  logger.info(`GymMate server listening on port ${PORT}`, { env: process.env.NODE_ENV || 'development' });
+});
+
+module.exports = app;

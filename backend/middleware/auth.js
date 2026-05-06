@@ -1,5 +1,6 @@
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { verifyAccessToken } = require('../utils/jwtAccess');
+const { logger } = require('../utils/logger');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -10,10 +11,14 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ message: 'No token provided, authorization denied' });
     }
 
-    // Verify token
+    // Verify token (supports JWT_SECRET rotation via JWT_SECRET_PREVIOUS)
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const out = verifyAccessToken(token);
+      if (out.expired) {
+        return res.status(401).json({ message: 'Token expired, please login again' });
+      }
+      decoded = out.decoded;
     } catch (err) {
       if (err.name === 'TokenExpiredError') {
         return res.status(401).json({ message: 'Token expired, please login again' });
@@ -37,7 +42,7 @@ const authMiddleware = async (req, res, next) => {
     next();
 
   } catch (error) {
-    console.error('Auth middleware error:', error);
+    logger.error('Auth middleware error', { err: error.message });
     res.status(500).json({ message: 'Internal server error' });
   }
 };

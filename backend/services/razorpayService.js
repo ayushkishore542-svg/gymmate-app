@@ -66,14 +66,35 @@ async function fetchSubscription(subscriptionId) {
  */
 function verifyWebhookSignature(rawBody, signature) {
   if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
-    console.warn('[Webhook] RAZORPAY_WEBHOOK_SECRET not set — skipping verification');
-    return true;
+    return false;
   }
   const expected = crypto
     .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
     .update(rawBody)
     .digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature || ''));
+  const sig = String(signature || '');
+  const expBuf = Buffer.from(expected, 'utf8');
+  const sigBuf = Buffer.from(sig, 'utf8');
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expBuf);
+}
+
+/**
+ * Verify Razorpay payment signature from client checkout (order_id + "|" + payment_id).
+ */
+function verifyPaymentCaptureSignature(orderId, paymentId, razorpaySignature) {
+  if (!orderId || !paymentId || !razorpaySignature || !process.env.RAZORPAY_KEY_SECRET) {
+    return false;
+  }
+  const body = `${orderId}|${paymentId}`;
+  const expected = crypto
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(body)
+    .digest('hex');
+  const expBuf = Buffer.from(expected, 'utf8');
+  const sigBuf = Buffer.from(String(razorpaySignature), 'utf8');
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expBuf);
 }
 
 module.exports = {
@@ -81,4 +102,5 @@ module.exports = {
   cancelSubscription,
   fetchSubscription,
   verifyWebhookSignature,
+  verifyPaymentCaptureSignature,
 };

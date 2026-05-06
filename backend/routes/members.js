@@ -6,6 +6,12 @@ const Payment = require('../models/Payment');
 const Attendance = require('../models/Attendance');
 const authMiddleware = require('../middleware/auth');
 
+function assertOwnerSelf(req, ownerId) {
+  if (req.user.role !== 'owner') return { ok: false, status: 403, message: 'Owners only' };
+  if (req.user._id.toString() !== ownerId) return { ok: false, status: 403, message: 'Access denied' };
+  return { ok: true };
+}
+
 // Get all members for a gym owner
 router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
   try {
@@ -14,6 +20,9 @@ router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(ownerId)) {
       return res.status(400).json({ message: 'Invalid owner ID' });
     }
+    const gate = assertOwnerSelf(req, ownerId);
+    if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
     
     const members = await User.find({ 
@@ -39,6 +48,21 @@ router.get('/:memberId', authMiddleware, async (req, res) => {
 
     if (!member) {
       return res.status(404).json({ message: 'Member not found' });
+    }
+
+    if (req.user.role === 'member') {
+      if (member._id.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    } else if (req.user.role === 'owner') {
+      const gid = member.gymOwnerId && member.gymOwnerId._id
+        ? member.gymOwnerId._id.toString()
+        : String(member.gymOwnerId);
+      if (!member.gymOwnerId || gid !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    } else {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     // Get payment history
@@ -74,6 +98,14 @@ router.get('/:memberId', authMiddleware, async (req, res) => {
 router.put('/:memberId', authMiddleware, async (req, res) => {
   try {
     const { memberId } = req.params;
+    const existing = await User.findById(memberId);
+    if (!existing || existing.role !== 'member') {
+      return res.status(404).json({ message: 'Member not found' });
+    }
+    if (req.user.role !== 'owner' || existing.gymOwnerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     const updates = req.body;
 
     // Don't allow updating certain fields
@@ -109,6 +141,9 @@ router.post('/:memberId/membership', authMiddleware, async (req, res) => {
     const member = await User.findById(memberId);
     if (!member) {
       return res.status(404).json({ message: 'Member not found' });
+    }
+    if (req.user.role !== 'owner' || member.gymOwnerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     // Calculate new membership dates
@@ -157,13 +192,20 @@ router.put('/:memberId/password', authMiddleware, async (req, res) => {
     const { memberId } = req.params;
     const { currentPassword, newPassword } = req.body;
 
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    const { validatePasswordStrength } = require('../utils/passwordPolicy');
+    const pwdCheck = validatePasswordStrength(newPassword);
+    if (!pwdCheck.ok) {
+      return res.status(400).json({ message: pwdCheck.message });
     }
 
     const member = await User.findById(memberId);
     if (!member) {
       return res.status(404).json({ message: 'Member not found' });
+    }
+    const isOwner = req.user.role === 'owner' && member.gymOwnerId.toString() === req.user._id.toString();
+    const isSelf = req.user.role === 'member' && member._id.toString() === req.user._id.toString();
+    if (!isOwner && !isSelf) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     // Verify current password
@@ -186,6 +228,14 @@ router.put('/:memberId/password', authMiddleware, async (req, res) => {
 router.delete('/:memberId', authMiddleware, async (req, res) => {
   try {
     const { memberId } = req.params;
+
+    const existing = await User.findById(memberId);
+    if (!existing || existing.role !== 'member') {
+      return res.status(404).json({ message: 'Member not found' });
+    }
+    if (req.user.role !== 'owner' || existing.gymOwnerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
 
     // Soft delete - just deactivate
     const member = await User.findByIdAndUpdate(
@@ -214,6 +264,9 @@ router.get('/gym/:ownerId/expiring', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(ownerId)) {
       return res.status(400).json({ message: 'Invalid owner ID' });
     }
+    const gate = assertOwnerSelf(req, ownerId);
+    if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
     
     const sevenDaysFromNow = new Date();
@@ -245,6 +298,9 @@ router.get('/gym/:ownerId/inactive', authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(ownerId)) {
       return res.status(400).json({ message: 'Invalid owner ID' });
     }
+    const gate = assertOwnerSelf(req, ownerId);
+    if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
+
     const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
     
     const threeDaysAgo = new Date();
