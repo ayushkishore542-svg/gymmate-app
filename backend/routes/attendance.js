@@ -295,7 +295,7 @@ router.get('/active-count/:ownerId', authMiddleware, async (req, res) => {
 });
 
 // ─── POST /qr-checkin ───────────────────────────────────────────────────────
-router.post('/qr-checkin', async (req, res) => {
+router.post('/qr-checkin', authMiddleware, async (req, res) => {
   try {
     const { memberId, gymOwnerId } = req.body;
     if (!memberId || !gymOwnerId)
@@ -336,4 +336,4 @@ router.post('/qr-checkin', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.ex

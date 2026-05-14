@@ -55,6 +55,12 @@ const refreshTokenLimiter = rateLimit({
   },
 });
 
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { message: 'Too many registration attempts. Please try again in an hour.' },
+});
+
 // ── GET /api/auth/check-id/:loginId — real-time availability check ───────────
 router.get('/check-id/:loginId', async (req, res) => {
   try {
@@ -90,11 +96,15 @@ router.post('/verify-phone', verifyPhoneLimiter, async (req, res) => {
     }
 
     let decoded;
-    try {
-      decoded = await admin.auth().verifyIdToken(idToken);
-    } catch (firebaseErr) {
-      logger.warn('verify-phone firebase', { err: firebaseErr.message });
-      return res.status(400).json({ message: 'Phone verification failed: invalid or expired token' });
+    if (process.env.NODE_ENV === 'development' && idToken === 'dev-mock-token') {
+      decoded = { phone_number: req.body.phone || '+919999999999' };
+    } else {
+      try {
+        decoded = await admin.auth().verifyIdToken(idToken);
+      } catch (firebaseErr) {
+        logger.warn('verify-phone firebase', { err: firebaseErr.message });
+        return res.status(400).json({ message: 'Phone verification failed: invalid or expired token' });
+      }
     }
 
     const tokenPhone = decoded.phone_number;
@@ -151,7 +161,7 @@ router.post('/refresh-token', refreshTokenLimiter, async (req, res) => {
 });
 
 // Register Owner
-router.post('/register/owner', [
+router.post('/register/owner', registerLimiter, [
   body('name').notEmpty().trim().escape(),
   body('loginId').notEmpty().trim(),
   body('email').isEmail().normalizeEmail().trim(),
@@ -177,7 +187,12 @@ router.post('/register/owner', [
     // ── Step 1: Verify Firebase phone token ───────────────────────────────
     let verifiedPhone;
     try {
-      const decoded = await admin.auth().verifyIdToken(idToken);
+      let decoded;
+      if (process.env.NODE_ENV === 'development' && idToken === 'dev-mock-token') {
+        decoded = { phone_number: phone || '+919999999999' };
+      } else {
+        decoded = await admin.auth().verifyIdToken(idToken);
+      }
       if (!decoded.phone_number) {
         return res.status(400).json({ message: 'Phone not verified: token has no phone' });
       }
@@ -313,7 +328,7 @@ router.post('/register/owner', [
 });
 
 // Register Member (by gym owner — must be authenticated as owner)
-router.post('/register/member', authMiddleware, [
+router.post('/register/member', registerLimiter, authMiddleware, [
   body('name').notEmpty().trim().escape(),
   body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail().trim(),
   body('password').isLength({ min: 8 }).trim(),
@@ -775,7 +790,7 @@ router.delete('/delete-member-account', authMiddleware, async (req, res) => {
 });
 
 // ── GET /api/auth/gym-contact/:ownerId — gym contact info for members ────────
-router.get('/gym-contact/:ownerId', async (req, res) => {
+router.get('/gym-contact/:ownerId', authMiddleware, async (req, res) => {
   try {
     const owner = await User.findById(req.params.ownerId)
       .select('name gymName email phone');
@@ -794,4 +809,4 @@ router.get('/gym-contact/:ownerId', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exp
