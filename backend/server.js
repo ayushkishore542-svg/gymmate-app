@@ -1,5 +1,6 @@
 const dotenv = require('dotenv');
 dotenv.config({ path: `${__dirname}/.env` });
+console.log('DEBUG LINE 211 IMPORT:', typeof require('./routes/auth'));
 
 const { validateEnv } = require('./utils/env');
 const { logger } = require('./utils/logger');
