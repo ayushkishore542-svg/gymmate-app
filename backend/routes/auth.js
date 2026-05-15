@@ -810,6 +810,3 @@ router.get('/gym-contact/:ownerId', authMiddleware, async (req, res) => {
 });
 
 module.exports = router;
- 
- m o d u l e . e x p o r t s   =   r o u t e r ;  
- 
