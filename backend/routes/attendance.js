@@ -336,4 +336,6 @@ router.post('/qr-checkin', authMiddleware, async (req, res) => {
   }
 });
 
-module.ex
+module.exports = router;
+
+ports = router;

@@ -1,20 +1,6 @@
 const dotenv = require('dotenv');
 dotenv.config({ path: `${__dirname}/.env` });
-console.log('ROUTES CHECK:', {
-  auth: typeof require('./routes/auth'),
-  webhooks: typeof require('./routes/webhooks'),
-  subscriptions: typeof require('./routes/subscriptions'),
-  members: typeof require('./routes/members'),
-  attendance: typeof require('./routes/attendance'),
-  payments: typeof require('./routes/payments'),
-  visitors: typeof require('./routes/visitors'),
-  notices: typeof require('./routes/notices'),
-  dashboard: typeof require('./routes/dashboard'),
-  todos: typeof require('./routes/todos'),
-  expenses: typeof require('./routes/expenses'),
-  settings: typeof require('./routes/settings'),
-  exports: typeof require('./routes/exports'),
-});
+console.log('DEBUG LINE 211 IMPORT:', typeof require('./routes/auth'));
 
 const { validateEnv } = require('./utils/env');
 const { logger } = require('./utils/logger');
