@@ -76,6 +76,7 @@ router.get('/user/:userId', authMiddleware, async (req, res) => {
     if (req.user._id.toString() === userId) {
       const payments = await Payment.find({ userId })
         .sort({ createdAt: -1 })
+        .limit(100)
         .populate('gymOwnerId', 'name gymName')
         .lean();
       return res.json({ payments });
@@ -88,6 +89,7 @@ router.get('/user/:userId', authMiddleware, async (req, res) => {
       }
       const payments = await Payment.find({ userId })
         .sort({ createdAt: -1 })
+        .limit(100)
         .populate('gymOwnerId', 'name gymName')
         .lean();
       return res.json({ payments });
@@ -116,7 +118,9 @@ router.get('/gym/:ownerId', authMiddleware, async (req, res) => {
 
     const payments = await Payment.find({ gymOwnerId: ownerObjectId })
       .sort({ createdAt: -1 })
-      .populate('userId', 'name email phone');
+      .limit(500)
+      .populate('userId', 'name email phone')
+      .lean();
 
     // Calculate total revenue
     const totalRevenue = payments.reduce((sum, payment) => {
@@ -281,7 +285,7 @@ router.get('/gym/:ownerId/stats', authMiddleware, async (req, res) => {
       gymOwnerId: ownerObjectId,
       paymentStatus: 'completed',
       createdAt: { $gte: startDate }
-    });
+    }).limit(1000).lean();
 
     // Calculate stats
     const totalRevenue = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -330,11 +334,15 @@ router.get('/summary/:ownerId', authMiddleware, async (req, res) => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // All membership payments for this gym
+    // All membership payments for this gym (capped at 1000 — use exports for full dataset)
     const allPayments = await Payment.find({
       gymOwnerId: ownerObjectId,
       paymentType: 'membership'
-    }).populate('userId', 'name loginId phone membershipPlan membershipEndDate membershipStatus');
+    })
+      .sort({ createdAt: -1 })
+      .limit(1000)
+      .populate('userId', 'name loginId phone membershipPlan membershipEndDate membershipStatus')
+      .lean();
 
     const thisMonthPayments = allPayments.filter(p => new Date(p.createdAt) >= monthStart);
 

@@ -75,4 +75,9 @@ const paymentSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes for common query patterns
+paymentSchema.index({ gymOwnerId: 1, paymentType: 1, createdAt: -1 });
+paymentSchema.index({ gymOwnerId: 1, paymentStatus: 1 });
+paymentSchema.index({ userId: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Payment', paymentSchema);

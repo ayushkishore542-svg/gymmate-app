@@ -3,130 +3,92 @@ const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Wallet = require('../models/Wallet');
 const { calculateForGym } = require('../routes/calorieLeaderboard');
+const { logger } = require('./logger');
 
 // Check and update expired memberships - runs daily at midnight
 const checkExpiredMemberships = cron.schedule('0 0 * * *', async () => {
   try {
-    console.log('Running expired membership check...');
-    
     const now = new Date();
     const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
 
-    // Find members whose membership expired more than 3 days ago
-    const expiredMembers = await User.find({
-      role: 'member',
-      membershipStatus: 'active',
-      membershipEndDate: { $lt: threeDaysAgo }
-    });
+    // Bulk update — single round-trip instead of N individual saves
+    const result = await User.updateMany(
+      { role: 'member', membershipStatus: 'active', membershipEndDate: { $lt: threeDaysAgo } },
+      { $set: { membershipStatus: 'expired' } }
+    );
 
-    // Update their status to expired
-    for (const member of expiredMembers) {
-      member.membershipStatus = 'expired';
-      await member.save();
-      console.log(`Membership expired for member ID: ${member._id}`);
-      
-      // TODO: Send notification to member and gym owner
-    }
-
-    console.log(`Processed ${expiredMembers.length} expired memberships`);
-
+    logger.info('cron_expired_memberships', { updated: result.modifiedCount });
+    // TODO: Send push/email notifications to affected members
   } catch (error) {
-    console.error('Error checking expired memberships:', error);
+    logger.error('cron_expired_memberships error', { err: error.message });
   }
 });
 
 // Check and update expired gym owner subscriptions - runs daily at midnight IST (18:30 UTC)
 const checkExpiredSubscriptions = cron.schedule('30 18 * * *', async () => {
   try {
-    console.log('Running expired subscription check...');
-
     const now = new Date();
 
-    // 1. Trial owners whose trial has ended AND have not added payment method
-    const expiredTrials = await User.find({
-      role: 'owner',
-      subscriptionStatus: 'trial',
-      subscriptionEndDate: { $lt: now },
-      paymentMethodAdded: { $ne: true },
+    // 1. Trial owners whose trial has ended — bulk update
+    const trials = await User.updateMany(
+      { role: 'owner', subscriptionStatus: 'trial', subscriptionEndDate: { $lt: now }, paymentMethodAdded: { $ne: true } },
+      { $set: { subscriptionStatus: 'expired' } }
+    );
+
+    // 2. Cancelled subscriptions whose access period has ended — bulk update
+    const cancelled = await User.updateMany(
+      { role: 'owner', subscriptionStatus: 'cancelled', currentPeriodEnd: { $lt: now } },
+      { $set: { subscriptionStatus: 'expired' } }
+    );
+
+    logger.info('cron_expired_subscriptions', {
+      trials: trials.modifiedCount,
+      cancelled: cancelled.modifiedCount,
     });
-
-    for (const owner of expiredTrials) {
-      owner.subscriptionStatus = 'expired';
-      await owner.save();
-      console.log(`Trial expired for owner ${owner._id} (${owner.gymName})`);
-      // TODO: Send push/email notification
-    }
-
-    // 2. Cancelled subscriptions whose access period has ended
-    const accessEnded = await User.find({
-      role: 'owner',
-      subscriptionStatus: 'cancelled',
-      currentPeriodEnd: { $lt: now },
-    });
-
-    for (const owner of accessEnded) {
-      owner.subscriptionStatus = 'expired';
-      await owner.save();
-      console.log(`Cancelled access ended for owner ${owner._id} (${owner.gymName})`);
-    }
-
-    console.log(`Processed ${expiredTrials.length + accessEnded.length} expired subscriptions`);
-
+    // TODO: Send push/email notifications to affected owners
   } catch (error) {
-    console.error('Error checking expired subscriptions:', error);
+    logger.error('cron_expired_subscriptions error', { err: error.message });
   }
 });
 
 // Send membership expiry reminders - runs daily at 9 AM
 const sendMembershipReminders = cron.schedule('0 9 * * *', async () => {
   try {
-    console.log('Sending membership expiry reminders...');
-    
     const now = new Date();
     const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
-    // Find members whose membership expires in next 3 days
     const expiringMembers = await User.find({
       role: 'member',
       membershipStatus: 'active',
-      membershipEndDate: {
-        $gte: now,
-        $lte: threeDaysFromNow
-      }
-    }).populate('gymOwnerId', 'name gymName email');
+      membershipEndDate: { $gte: now, $lte: threeDaysFromNow },
+    }, '_id membershipEndDate').lean();
 
-    for (const member of expiringMembers) {
-      const daysLeft = Math.ceil((new Date(member.membershipEndDate) - now) / (1000 * 60 * 60 * 24));
-      console.log(`Reminder queued for member ID: ${member._id}, expires in ${daysLeft} day(s)`);
-      
-      // TODO: Send email/SMS notification to member
-      // TODO: Send notification to gym owner
-    }
-
-    console.log(`Sent ${expiringMembers.length} membership reminders`);
-
+    logger.info('cron_membership_reminders', { count: expiringMembers.length });
+    // TODO: Send push/email/SMS notifications to expiringMembers
   } catch (error) {
-    console.error('Error sending membership reminders:', error);
+    logger.error('cron_membership_reminders error', { err: error.message });
   }
 });
 
 // Recalculate leaderboards for all gyms — runs daily at midnight
 const calculateLeaderboards = cron.schedule('0 0 * * *', async () => {
   try {
-    console.log('🏆 Calculating weekly leaderboards...');
-    const owners = await User.find({ role: 'owner' }, '_id gymName');
+    const owners = await User.find({ role: 'owner' }, '_id gymName').lean();
+
+    // Process in parallel batches of 10 to avoid overwhelming DB
+    const BATCH = 10;
     let count = 0;
-    for (const owner of owners) {
-      try {
-        await calculateForGym(owner._id);
-        count++;
-      } catch (err) {
-        console.error(`Leaderboard failed for gym ${owner.gymName}:`, err.message);
-      }
+    for (let i = 0; i < owners.length; i += BATCH) {
+      const batch = owners.slice(i, i + BATCH);
+      const results = await Promise.allSettled(batch.map(o => calculateForGym(o._id)));
+      results.forEach((r, idx) => {
+        if (r.status === 'fulfilled') count++;
+        else logger.error('cron_leaderboard_gym_failed', { gym: batch[idx].gymName, err: r.reason?.message });
+      });
     }
-    console.log(`✅ Leaderboards calculated for ${count} gyms`);
+    logger.info('cron_leaderboards_done', { calculated: count, total: owners.length });
   } catch (err) {
-    console.error('Error calculating leaderboards:', err);
+    logger.error('cron_leaderboards error', { err: err.message });
   }
 });
 
@@ -139,75 +101,59 @@ const autoCloseStaleCheckIns = cron.schedule('*/30 * * * *', async () => {
     const today = new Date().toISOString().split('T')[0];
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
 
-    const staleToday = await Attendance.find({
-      date: today,
-      checkOutTime: null,
-      durationUnknown: false,
-      checkInTime: { $lt: threeHoursAgo },
-    });
+    // Bulk update today's stale check-ins — single round-trip
+    const todayResult = await Attendance.updateMany(
+      { date: today, checkOutTime: null, durationUnknown: false, checkInTime: { $lt: threeHoursAgo } },
+      { $set: { durationUnknown: true } }
+    );
 
-    for (const rec of staleToday) {
-      rec.durationUnknown = true;
-      // NOTE: checkOutTime stays null so member CAN still check out
-      await rec.save();
-    }
+    // Bulk close open records from PREVIOUS days
+    const prevResult = await Attendance.updateMany(
+      { date: { $lt: today }, checkOutTime: null },
+      { $set: { durationUnknown: true } }
+    );
 
-    if (staleToday.length > 0) {
-      console.log(`⏰ Marked ${staleToday.length} stale check-in(s) as durationUnknown`);
-    }
-
-    // Also close open records from PREVIOUS days (member never came back)
-    const stalePrevious = await Attendance.find({
-      date: { $lt: today },
-      checkOutTime: null,
-    });
-    for (const rec of stalePrevious) {
-      rec.durationUnknown = true;
-      await rec.save();
-    }
-    if (stalePrevious.length > 0) {
-      console.log(`⏰ Closed ${stalePrevious.length} unclosed check-in(s) from previous days`);
+    if (todayResult.modifiedCount > 0 || prevResult.modifiedCount > 0) {
+      logger.info('cron_stale_checkins_closed', {
+        today: todayResult.modifiedCount,
+        previous: prevResult.modifiedCount,
+      });
     }
   } catch (error) {
-    console.error('Auto-close stale check-ins error:', error);
+    logger.error('cron_stale_checkins error', { err: error.message });
   }
 });
 
 // Zero-out expired wallet credit balance -- runs daily at 1 AM
 const expireWalletCredits = cron.schedule('0 1 * * *', async () => {
   try {
-    console.log('Checking expired wallet credits...');
     const now = new Date();
 
-    // Find all wallets that have at least one credit transaction that has expired
+    // Find wallets with at least one expired credit
     const wallets = await Wallet.find({
-      'transactions.type': 'credit',
-      'transactions.expiresAt': { $lt: now },
+      transactions: { $elemMatch: { type: 'credit', expiresAt: { $lt: now } } },
     });
 
-    let updated = 0;
+    // Recompute balance in JS (requires transaction-level expiry logic),
+    // then bulk-write only wallets whose balance actually changed
+    const ops = [];
     for (const wallet of wallets) {
-      const hadExpired = wallet.transactions.some(
-        t => t.type === 'credit' && t.expiresAt && new Date(t.expiresAt) < now
-      );
-      if (hadExpired) {
-        const oldBalance = wallet.balance;
-        wallet.recomputeBalance();
-        if (wallet.balance !== oldBalance) {
-          await wallet.save();
-          updated++;
-          console.log(
-            'Wallet expired credits zeroed for userId:',
-            wallet.userId,
-            '| Old balance:', oldBalance,
-            '| New balance:', wallet.balance
-          );
-        }
+      const oldBalance = wallet.balance;
+      wallet.recomputeBalance();
+      if (wallet.balance !== oldBalance) {
+        ops.push({
+          updateOne: {
+            filter: { _id: wallet._id },
+            update: { $set: { balance: wallet.balance } },
+          },
+        });
       }
     }
-    console.log('Expired wallet credits processed for ' + updated + ' wallets');
+
+    if (ops.length > 0) await Wallet.bulkWrite(ops);
+    logger.info('cron_expire_wallet_credits', { checked: wallets.length, updated: ops.length });
   } catch (err) {
-    console.error('Error expiring wallet credits:', err);
+    logger.error('cron_expire_wallet_credits error', { err: err.message });
   }
 });
 

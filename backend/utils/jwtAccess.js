@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { getJwtSigningSecret, getJwtVerifySecrets } = require('./env');
 
-const ACCESS_EXPIRES = '24h';
+const ACCESS_EXPIRES = '15m';
 
 function signAccessToken(payload) {
   const secret = getJwtSigningSecret();
