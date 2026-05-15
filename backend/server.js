@@ -320,17 +320,18 @@ if (process.env.NODE_ENV === 'production') {
 // Start server
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
-  logger.info(`GymMate server listening on port ${PORT}`, { env: process.env.NODE_ENV || 'development' });
+  logger.info('GymMate server listening on port ' + PORT, { env: process.env.NODE_ENV || 'development' });
 });
 
-// Graceful shutdown — Railway sends SIGTERM on every redeploy
-// Without this, in-flight requests are dropped and DB connections leak
+// Graceful shutdown - Railway sends SIGTERM on every redeploy.
+// Without this, in-flight requests are dropped and DB connections leak.
 process.on('SIGTERM', () => {
-  logger.info('SIGTERM received — shutting down gracefully');
-  server.close(async () => {
-    await mongoose.connection.close();
-    logger.info('MongoDB connection closed. Process exiting.');
-    process.exit(0);
+  logger.info('SIGTERM received - shutting down gracefully');
+  server.close(function() {
+    mongoose.connection.close().then(function() {
+      logger.info('MongoDB connection closed. Process exiting.');
+      process.exit(0);
+    });
   });
 });
 
