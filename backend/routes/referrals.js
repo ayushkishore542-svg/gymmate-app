@@ -146,53 +146,46 @@ router.post('/apply', auth, async (req, res) => {
       return res.status(400).json({ message: 'code required' });
     }
 
-    const ref = await Referral.findOne({ code: code.toUpperCase().trim() })
-      .populate('ownerId', 'name role');
-
-    if (!ref) return res.status(404).json({ message: 'Referral code not found' });
-
-    // Prevent double-application for same userId
-    const alreadyApplied = ref.usedBy.some(
-      u => u.userId.toString() === userId && u.rewardGiven
-    );
-    if (alreadyApplied) {
-      return res.json({ success: true, message: 'Reward already applied', alreadyApplied: true });
-    }
-
     // Reward amount depends on who used the code
     const rewardAmount = (userType === 'member') ? MEMBER_REWARD : OWNER_REWARD;
 
-    // Add or update usedBy entry
-    const existingEntry = ref.usedBy.find(u => u.userId.toString() === userId);
-    if (existingEntry) {
-      existingEntry.rewardGiven  = true;
-      existingEntry.rewardAmount = rewardAmount;
-      existingEntry.paymentId    = paymentId || null;
-    } else {
-      ref.usedBy.push({
-        userId,
-        userType,
-        usedAt:       new Date(),
-        rewardGiven:  true,
-        rewardAmount,
-        paymentId:    paymentId || null,
-      });
-    }
+    // Atomic: apply referral only if userId hasn't already been rewarded.
+    // findOneAndUpdate with $elemMatch condition prevents race condition where
+    // two concurrent requests both pass the alreadyApplied check.
+    const ref = await Referral.findOneAndUpdate(
+      {
+        code:   code.toUpperCase().trim(),
+        usedBy: { $not: { $elemMatch: { userId: new mongoose.Types.ObjectId(userId), rewardGiven: true } } },
+      },
+      {
+        $push: {
+          usedBy: {
+            userId,
+            userType,
+            usedAt:       new Date(),
+            rewardGiven:  true,
+            rewardAmount,
+            paymentId:    paymentId || null,
+          },
+        },
+        $inc: { totalEarned: rewardAmount },
+      },
+      { new: true }
+    ).populate('ownerId', 'name role');
 
-    ref.totalEarned += rewardAmount;
-    await ref.save();
+    if (!ref) {
+      // Either code doesn't exist OR reward already applied — distinguish for caller
+      const exists = await Referral.exists({ code: code.toUpperCase().trim() });
+      if (!exists) return res.status(404).json({ message: 'Referral code not found' });
+      return res.json({ success: true, message: 'Reward already applied', alreadyApplied: true });
+    }
 
     logger.info('referral_apply', { code: ref.code, userId, userType, ip: req.ip, paymentId });
 
-    // Credit the code owner's wallet
-    const ownerWallet = await Wallet.getOrCreate(
-      ref.ownerId._id,
-      ref.ownerType
-    );
+    // Atomically credit code owner's wallet — $inc prevents balance race condition
     const expiresAt = new Date();
     expiresAt.setMonth(expiresAt.getMonth() + 12);
-
-    ownerWallet.transactions.push({
+    const txnDoc = {
       type:        'credit',
       amount:      rewardAmount,
       description: 'Referral reward — ' +
@@ -200,14 +193,18 @@ router.post('/apply', auth, async (req, res) => {
                    ' with your code',
       referenceId: paymentId || code,
       expiresAt,
-    });
-    ownerWallet.recomputeBalance();
-    await ownerWallet.save();
+    };
+    await Wallet.getOrCreate(ref.ownerId._id, ref.ownerType);
+    const updatedWallet = await Wallet.findOneAndUpdate(
+      { userId: ref.ownerId._id },
+      { $push: { transactions: txnDoc }, $inc: { balance: rewardAmount } },
+      { new: true }
+    );
 
     res.json({
       success:      true,
       rewardAmount,
-      ownerBalance: ownerWallet.balance,
+      ownerBalance: updatedWallet?.balance ?? 0,
       message:      'Referral reward of Rs.' + rewardAmount + ' credited to code owner.',
     });
   } catch (err) {

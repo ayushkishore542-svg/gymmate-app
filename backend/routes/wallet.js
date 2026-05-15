@@ -141,21 +141,31 @@ router.post('/withdraw', auth, async (req, res) => {
     const deductionAmt  = Math.round(amount * deductionPct);
     const netAmount     = amount - deductionAmt;
 
-    // Save UPI/bank for future use if provided
-    if (upiId) wallet.upiId = upiId;
-    if (bankAccount) wallet.bankAccount = bankAccount;
-
-    wallet.transactions.push({
-      type: 'withdrawal',
+    // Atomic: push transaction + decrement balance, guarded by balance >= amount
+    // Prevents race condition where two concurrent withdrawals both pass the soft check
+    const txnDoc = {
+      type:        'withdrawal',
       amount,
       description: upiId
         ? 'Cash withdrawal to UPI: ' + upiId
         : 'Cash withdrawal to bank account',
       referenceId: 'WITHDRAW_' + Date.now(),
-      expiresAt: null,
-    });
-    wallet.recomputeBalance();
-    await wallet.save();
+      expiresAt:   null,
+    };
+    const updateOp = { $push: { transactions: txnDoc }, $inc: { balance: -amount } };
+    if (upiId)       updateOp.$set = { upiId };
+    if (bankAccount) updateOp.$set = { ...(updateOp.$set || {}), bankAccount };
+
+    const updated = await Wallet.findOneAndUpdate(
+      { userId, balance: { $gte: amount } },
+      updateOp,
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(400).json({
+        message: `Insufficient balance. Available: ₹${wallet.balance}`,
+      });
+    }
 
     res.json({
       success:       true,
@@ -163,7 +173,7 @@ router.post('/withdraw', auth, async (req, res) => {
       deductionAmt,
       netAmount,
       method:        upiId ? 'UPI' : 'Bank',
-      balance:       wallet.balance,
+      balance:       updated.balance,
       message:       `Withdrawal request of ₹${amount} submitted. You will receive ₹${netAmount} after deductions.`,
     });
   } catch (err) {
