@@ -1,6 +1,20 @@
 const dotenv = require('dotenv');
 dotenv.config({ path: `${__dirname}/.env` });
-console.log('DEBUG LINE 211 IMPORT:', typeof require('./routes/auth'));
+console.log('ROUTES CHECK:', {
+  auth: typeof require('./routes/auth'),
+  webhooks: typeof require('./routes/webhooks'),
+  subscriptions: typeof require('./routes/subscriptions'),
+  members: typeof require('./routes/members'),
+  attendance: typeof require('./routes/attendance'),
+  payments: typeof require('./routes/payments'),
+  visitors: typeof require('./routes/visitors'),
+  notices: typeof require('./routes/notices'),
+  dashboard: typeof require('./routes/dashboard'),
+  todos: typeof require('./routes/todos'),
+  expenses: typeof require('./routes/expenses'),
+  settings: typeof require('./routes/settings'),
+  exports: typeof require('./routes/exports'),
+});
 
 const { validateEnv } = require('./utils/env');
 const { logger } = require('./utils/logger');
@@ -52,6 +66,7 @@ const feedbackRoutes      = require('./routes/feedback');
 const referralRoutes      = require('./routes/referrals');
 const walletRoutes        = require('./routes/wallet');
 const supportRoutes       = require('./routes/support');
+const gamificationRoutes  = require('./routes/gamification');
 
 // Calorie Tracker routes
 const calorieSubscriptionRoutes = require('./routes/calorieSubscription');
@@ -71,6 +86,8 @@ const {
   calculateLeaderboards,
   autoCloseStaleCheckIns,
   expireWalletCredits,
+  gamificationDailyJob,
+  gamificationMonthlyReset,
 } = require('./utils/cronJobs');
 
 const app = express();
@@ -238,6 +255,7 @@ app.use('/api/feedback',       authMiddleware, subscriptionGuard, feedbackRoutes
 app.use('/api/referrals',      referralRoutes);   // validate is public; individual routes do own auth
 app.use('/api/wallet',         authMiddleware, walletRoutes);
 app.use('/api/support',        authMiddleware, subscriptionGuard, supportRoutes);
+app.use('/api/gamification',   authMiddleware, gamificationRoutes);
 
 // ── Member feature routes (auth only, no subscription guard — member-side) ───
 const memberWorkoutRoutes  = require('./routes/memberWorkouts');
@@ -295,6 +313,8 @@ mongoose.connect(process.env.MONGO_URI, {
   calculateLeaderboards.start();
   autoCloseStaleCheckIns.start();
   expireWalletCredits.start();
+  gamificationDailyJob.start();
+  gamificationMonthlyReset.start();
   logger.info('Cron jobs started');
 })
 .catch((err) => {

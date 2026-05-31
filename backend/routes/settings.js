@@ -26,13 +26,14 @@ router.get('/', authMiddleware, async (req, res) => {
 // PUT /api/settings/gym — update operating hours, capacity, trial days
 router.put('/gym', authMiddleware, async (req, res) => {
   try {
-    const { openTime, closeTime, maxCapacity, trialPeriodDays } = req.body;
+    const { openTime, closeTime, maxCapacity, trialPeriodDays, openDays } = req.body;
     const settings = await getOrCreate(req.user._id);
 
     if (openTime !== undefined)      settings.openTime = openTime;
     if (closeTime !== undefined)     settings.closeTime = closeTime;
     if (maxCapacity !== undefined)   settings.maxCapacity = Number(maxCapacity);
     if (trialPeriodDays !== undefined) settings.trialPeriodDays = Number(trialPeriodDays);
+    if (Array.isArray(openDays))     settings.openDays = openDays.map(Number).filter(n => n >= 1 && n <= 7);
 
     await settings.save();
     res.json({ settings, message: 'Gym settings updated' });

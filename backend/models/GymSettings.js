@@ -34,6 +34,9 @@ const gymSettingsSchema = new mongoose.Schema({
     ],
   },
 
+  // Open days: 1=Mon … 7=Sun (default Mon-Sat)
+  openDays: { type: [Number], default: [1, 2, 3, 4, 5, 6] },
+
   // Notification preferences
   notifications: {
     pushEnabled:          { type: Boolean, default: true },
