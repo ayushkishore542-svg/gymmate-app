@@ -158,6 +158,17 @@ const userSchema = new mongoose.Schema({
     default: null,
   },
   
+  // Push notifications (Expo)
+  expoPushToken: {
+    type: String,
+    default: null,
+  },
+  // Idempotency: date (YYYY-MM-DD) when we last sent an inactivity alert for this member
+  lastInactiveAlertDate: {
+    type: String,
+    default: null,
+  },
+
   // Earnings from referrals
   referralEarnings: {
     type: Number,

@@ -67,6 +67,7 @@ const referralRoutes      = require('./routes/referrals');
 const walletRoutes        = require('./routes/wallet');
 const supportRoutes       = require('./routes/support');
 const gamificationRoutes  = require('./routes/gamification');
+const ownerRoutes         = require('./routes/owner');
 
 // Calorie Tracker routes
 const calorieSubscriptionRoutes = require('./routes/calorieSubscription');
@@ -88,6 +89,7 @@ const {
   expireWalletCredits,
   gamificationDailyJob,
   gamificationMonthlyReset,
+  inactiveMemberAlerts,
 } = require('./utils/cronJobs');
 
 const app = express();
@@ -256,6 +258,7 @@ app.use('/api/referrals',      referralRoutes);   // validate is public; individ
 app.use('/api/wallet',         authMiddleware, walletRoutes);
 app.use('/api/support',        authMiddleware, subscriptionGuard, supportRoutes);
 app.use('/api/gamification',   authMiddleware, gamificationRoutes);
+app.use('/api/owner',          authMiddleware, subscriptionGuard, ownerRoutes);
 
 // ── Member feature routes (auth only, no subscription guard — member-side) ───
 const memberWorkoutRoutes  = require('./routes/memberWorkouts');
@@ -315,6 +318,7 @@ mongoose.connect(process.env.MONGO_URI, {
   expireWalletCredits.start();
   gamificationDailyJob.start();
   gamificationMonthlyReset.start();
+  inactiveMemberAlerts.start();
   logger.info('Cron jobs started');
 })
 .catch((err) => {

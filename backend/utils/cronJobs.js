@@ -7,6 +7,7 @@ const Gamification = require('../models/Gamification');
 const { calculateForGym } = require('../routes/calorieLeaderboard');
 const { applyMissPenalty, checkPositionBadges } = require('./xpEngine');
 const { logger } = require('./logger');
+const { sendOwnerPush } = require('./pushNotifications');
 
 // Check and update expired memberships - runs daily at midnight
 const checkExpiredMemberships = cron.schedule('0 0 * * *', async () => {
@@ -293,6 +294,123 @@ const gamificationMonthlyReset = cron.schedule('0 0 1 * *', async () => {
   }
 }, { timezone: 'Asia/Kolkata' });
 
+// ── Inactive member alerts — runs daily at 01:00 IST ───────────────────────
+// For each owner: find members of their gym whose last check-in was exactly
+// 3 days ago (just crossed the threshold). Send one push per such member.
+// Idempotent: lastInactiveAlertDate tracks the last date we sent an alert
+// for that member — we skip if already alerted today.
+const inactiveMemberAlerts = cron.schedule('0 1 * * *', async () => {
+  try {
+    const now          = new Date();
+    const todayStr     = now.toISOString().split('T')[0];
+    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+    const fourDaysAgo  = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
+
+    // 1. Get all owners who have an Expo push token
+    const owners = await User.find(
+      { role: 'owner', expoPushToken: { $ne: null } },
+      '_id expoPushToken',
+    ).lean();
+
+    if (owners.length === 0) {
+      logger.info('cron_inactive_alerts: no owners with push tokens');
+      return;
+    }
+
+    let totalAlerts = 0;
+
+    for (const owner of owners) {
+      // 2. Get active members for this gym
+      const members = await User.find(
+        {
+          gymOwnerId:       owner._id,
+          role:             'member',
+          isActive:         true,
+          membershipStatus: 'active',
+          // Skip members already alerted today (idempotency)
+          $or: [
+            { lastInactiveAlertDate: { $ne: todayStr } },
+            { lastInactiveAlertDate: null },
+          ],
+        },
+        '_id name lastInactiveAlertDate',
+      ).lean();
+
+      if (members.length === 0) continue;
+      const memberIds = members.map(m => m._id);
+
+      // 3. Find members whose last check-in falls in the window [4 days ago, 3 days ago]
+      //    i.e. they crossed exactly 3 days inactive today
+      const recentCheckIns = await Attendance.aggregate([
+        {
+          $match: {
+            gymOwnerId: owner._id,
+            memberId:   { $in: memberIds },
+            checkInTime: { $gte: fourDaysAgo }, // only look at recent records
+          },
+        },
+        { $sort: { checkInTime: -1 } },
+        { $group: { _id: '$memberId', lastCheckIn: { $first: '$checkInTime' } } },
+      ]);
+
+      // Map memberId → lastCheckIn
+      const checkInMap = {};
+      recentCheckIns.forEach(r => { checkInMap[r._id.toString()] = r.lastCheckIn; });
+
+      // Also find members with NO check-in at all (never visited) — treat as inactive
+      const allLastCheckIns = await Attendance.aggregate([
+        { $match: { gymOwnerId: owner._id, memberId: { $in: memberIds } } },
+        { $sort: { checkInTime: -1 } },
+        { $group: { _id: '$memberId', lastCheckIn: { $first: '$checkInTime' } } },
+      ]);
+      const allCheckInMap = {};
+      allLastCheckIns.forEach(r => { allCheckInMap[r._id.toString()] = r.lastCheckIn; });
+
+      const bulkOps = [];
+
+      for (const member of members) {
+        const idStr       = member._id.toString();
+        const lastCheckIn = allCheckInMap[idStr] || null;
+
+        // Member just crossed 3-day threshold if:
+        //  a) they have a check-in, and it was >= 3 days ago (last was > 3 days, checked in recent window check)
+        //  b) they never checked in and joined >= 3 days ago (handled by treating null as inactive)
+        const justCrossed = !lastCheckIn || new Date(lastCheckIn) < threeDaysAgo;
+        if (!justCrossed) continue;
+
+        // Send push to owner
+        const daysInactive = lastCheckIn
+          ? Math.floor((now - new Date(lastCheckIn)) / (1000 * 60 * 60 * 24))
+          : 3;
+
+        await sendOwnerPush(
+          owner.expoPushToken,
+          '🏋️ Inactive Member',
+          `${member.name} ${daysInactive} din se gym nahi aaya`,
+          { type: 'inactive_member', memberId: idStr },
+        );
+
+        // Mark as alerted today
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: member._id },
+            update: { $set: { lastInactiveAlertDate: todayStr } },
+          },
+        });
+        totalAlerts++;
+      }
+
+      if (bulkOps.length > 0) {
+        await User.bulkWrite(bulkOps);
+      }
+    }
+
+    logger.info('cron_inactive_alerts', { totalAlerts, owners: owners.length });
+  } catch (err) {
+    logger.error('cron_inactive_alerts error', { err: err.message });
+  }
+}, { timezone: 'Asia/Kolkata' });
+
 module.exports = {
   checkExpiredMemberships,
   checkExpiredSubscriptions,
@@ -302,4 +420,5 @@ module.exports = {
   expireWalletCredits,
   gamificationDailyJob,
   gamificationMonthlyReset,
+  inactiveMemberAlerts,
 };
