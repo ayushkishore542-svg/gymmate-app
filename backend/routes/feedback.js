@@ -16,6 +16,15 @@ router.post('/', authMiddleware, async (req, res) => {
       comment: comment || ''
     });
     await feedback.save();
+
+    // Award XP to member for feedback (one-time)
+    if (memberId) {
+      const { awardXP } = require('../utils/xpEngine');
+      awardXP(memberId.toString(), 'feedback').catch(e =>
+        console.error('[XP] feedback award failed:', e.message)
+      );
+    }
+
     res.status(201).json({ message: 'Feedback submitted', feedback });
   } catch (error) {
     console.error('Submit feedback error:', error);

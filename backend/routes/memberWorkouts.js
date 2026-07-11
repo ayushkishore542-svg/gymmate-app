@@ -35,6 +35,14 @@ router.post('/', auth, async (req, res) => {
       });
     }
 
+    // Award XP when workout is marked completed
+    if (completed === true) {
+      const { awardXP } = require('../utils/xpEngine');
+      awardXP(memberId.toString(), 'workout').catch(e =>
+        console.error('[XP] workout award failed:', e.message)
+      );
+    }
+
     res.json({ workout });
   } catch (err) {
     console.error('[MemberWorkout] POST error:', err);

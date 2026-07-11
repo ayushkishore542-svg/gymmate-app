@@ -324,10 +324,17 @@ router.post('/qr-checkin', authMiddleware, async (req, res) => {
       });
     }
 
-    const attendance = new Attendance({ memberId, gymOwnerId, checkInTime: new Date(), date: today });
+    const checkInTime = new Date();
+    const attendance = new Attendance({ memberId, gymOwnerId, checkInTime, date: today });
     await attendance.save();
-    member.lastAttendance = new Date();
+    member.lastAttendance = checkInTime;
     await member.save();
+
+    // Award XP (fire-and-forget — don't block response)
+    const { awardXP } = require('../utils/xpEngine');
+    awardXP(memberId, 'checkin', { timestamp: checkInTime }).catch(e =>
+      console.error('[XP] checkin award failed:', e.message)
+    );
 
     res.status(201).json({ message: 'Check-in successful', attendance, member: { name: member.name } });
   } catch (error) {
@@ -337,5 +344,3 @@ router.post('/qr-checkin', authMiddleware, async (req, res) => {
 });
 
 module.exports = router;
-
-ports = router;

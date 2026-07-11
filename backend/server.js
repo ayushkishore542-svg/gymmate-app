@@ -79,6 +79,9 @@ const calorieSettingsRoutes      = require('./routes/calorieSettings');
 const calorieProgressRoutes      = require('./routes/calorieProgress');
 const calorieLeaderboardRoutes   = require('./routes/calorieLeaderboard');
 
+// In-App Purchase (Google Play) verification
+const iapRoutes = require('./routes/iap');
+
 // Import cron jobs
 const {
   checkExpiredMemberships,
@@ -277,6 +280,9 @@ app.use('/api/calorie/water',        calorieWaterRoutes);
 app.use('/api/calorie/settings',     calorieSettingsRoutes);
 app.use('/api/calorie/progress',     calorieProgressRoutes);
 app.use('/api/calorie/leaderboard',  calorieLeaderboardRoutes);
+
+// In-App Purchase verification (auth handled inside router)
+app.use('/api/iap', iapRoutes);
 
 // Serve uploaded progress photos
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

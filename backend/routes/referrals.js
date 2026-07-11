@@ -201,6 +201,12 @@ router.post('/apply', auth, async (req, res) => {
       { new: true }
     );
 
+    // Award XP to code owner for successful referral
+    const { awardXP } = require('../utils/xpEngine');
+    awardXP(ref.ownerId._id.toString(), 'referral').catch(e =>
+      console.error('[XP] referral award failed:', e.message)
+    );
+
     res.json({
       success:      true,
       rewardAmount,
