@@ -121,7 +121,6 @@ app.disable('x-powered-by');
 // Allowed origins
 const allowedOrigins = [
   'http://localhost:3000',
-  'http://10.44.75.138:3000',
   'https://gymmate-app.vercel.app',
   'https://gymmate-app-production.up.railway.app',
 ];

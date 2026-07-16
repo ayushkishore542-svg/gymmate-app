@@ -1,6 +1,7 @@
 const express  = require('express');
 const router   = express.Router();
 const User     = require('../models/User');
+const OwnerSubscription = require('../models/OwnerSubscription');
 const auth     = require('../middleware/auth');
 const razorpay = require('../services/razorpayService');
 
@@ -11,6 +12,12 @@ function calcTrialDaysLeft(subscriptionEndDate) {
   const ms = new Date(subscriptionEndDate).getTime() - Date.now();
   return Math.max(0, Math.ceil(ms / (1000 * 60 * 60 * 24)));
 }
+
+// Google Play owner SKUs → display plan names
+const OWNER_PLAN_NAMES = {
+  owner_growth_monthly: 'Growth',
+  owner_pro_monthly:    'Pro',
+};
 
 // ─── GET /api/subscriptions/status ─────────────────────────────────────────
 // Returns the owner's current subscription state.
@@ -31,19 +38,45 @@ router.get('/status', auth, async (req, res) => {
     // (we rely on webhooks to keep our DB up-to-date; this is just the
     //  stored view — no live Razorpay call on every status poll)
 
+    // Base (Razorpay / trial) view from the User document.
+    let status          = user.subscriptionStatus;
+    let planName        = 'GymMate Pro';
+    let amount          = 699;
+    let nextBillingDate = user.currentPeriodEnd;
+    let source          = 'razorpay';
+    let activeProductId = null;
+
+    // Google Play owner subscription overrides when active + not expired.
+    const ownerSub = await OwnerSubscription.findOne({ userId: req.user._id });
+    const ownerActive =
+      ownerSub &&
+      ownerSub.status === 'active' &&
+      ownerSub.expiryTime &&
+      new Date(ownerSub.expiryTime).getTime() > Date.now();
+
+    if (ownerActive) {
+      status          = 'active';
+      planName        = OWNER_PLAN_NAMES[ownerSub.productId] || planName;
+      nextBillingDate = ownerSub.expiryTime;
+      source          = 'google_play';
+      activeProductId = ownerSub.productId;
+    }
+
     res.json({
-      status:              user.subscriptionStatus,
-      planName:            'GymMate Pro',
-      amount:              699,
+      status,
+      planName,
+      amount,
       currency:            'INR',
       trialDaysLeft,
       trialEndDate:        user.subscriptionEndDate,
       trialStartDate:      user.subscriptionStartDate,
-      nextBillingDate:     user.currentPeriodEnd,
+      nextBillingDate,
       paymentMethodAdded:  user.paymentMethodAdded,
       razorpayShortUrl:    user.razorpayShortUrl,
       lastPaymentAt:       user.lastPaymentAt,
       lastPaymentStatus:   user.lastPaymentStatus,
+      source,
+      activeProductId,
     });
   } catch (err) {
     console.error('[Subscriptions] status error:', err);
