@@ -15,7 +15,7 @@
  *   /api/auth, /api/subscriptions, /api/webhooks
  */
 
-const User = require('../models/User');
+const { getEffectiveSubStatus } = require('../utils/getEffectiveSubStatus');
 const { logger } = require('../utils/logger');
 
 module.exports = async function subscriptionGuard(req, res, next) {
@@ -26,12 +26,14 @@ module.exports = async function subscriptionGuard(req, res, next) {
     // Members are not subject to owner subscription rules
     if (req.user.role !== 'owner') return next();
 
-    const owner = await User.findById(req.user._id).select(
-      'subscriptionStatus subscriptionEndDate currentPeriodEnd paymentMethodAdded'
-    );
+    // Merge active Google Play subscription over Razorpay/trial (shared helper).
+    const eff = await getEffectiveSubStatus(req.user._id);
+    if (!eff) return res.status(404).json({ message: 'Owner not found' });
 
-    if (!owner) return res.status(404).json({ message: 'Owner not found' });
+    // Active Play subscription → allow through immediately.
+    if (eff.ownerActive) return next();
 
+    const owner  = eff.user;
     const now    = new Date();
     const status = owner.subscriptionStatus;
 

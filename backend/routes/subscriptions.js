@@ -1,7 +1,7 @@
 const express  = require('express');
 const router   = express.Router();
 const User     = require('../models/User');
-const OwnerSubscription = require('../models/OwnerSubscription');
+const { getEffectiveSubStatus } = require('../utils/getEffectiveSubStatus');
 const auth     = require('../middleware/auth');
 const razorpay = require('../services/razorpayService');
 
@@ -13,54 +13,18 @@ function calcTrialDaysLeft(subscriptionEndDate) {
   return Math.max(0, Math.ceil(ms / (1000 * 60 * 60 * 24)));
 }
 
-// Google Play owner SKUs → display plan names
-const OWNER_PLAN_NAMES = {
-  owner_growth_monthly: 'Growth',
-  owner_pro_monthly:    'Pro',
-};
-
 // ─── GET /api/subscriptions/status ─────────────────────────────────────────
 // Returns the owner's current subscription state.
 
 router.get('/status', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select(
-      'subscriptionStatus subscriptionEndDate subscriptionStartDate ' +
-      'razorpaySubscriptionId razorpayShortUrl paymentMethodAdded ' +
-      'currentPeriodStart currentPeriodEnd lastPaymentAt lastPaymentStatus'
-    );
+    // Effective status = User (Razorpay/trial) merged with any active Play sub.
+    const eff = await getEffectiveSubStatus(req.user._id);
+    if (!eff) return res.status(404).json({ message: 'User not found' });
 
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    const { user, status, planName, amount, nextBillingDate, source, activeProductId } = eff;
 
     const trialDaysLeft = calcTrialDaysLeft(user.subscriptionEndDate);
-
-    // If a Razorpay subscription exists, optionally sync live status
-    // (we rely on webhooks to keep our DB up-to-date; this is just the
-    //  stored view — no live Razorpay call on every status poll)
-
-    // Base (Razorpay / trial) view from the User document.
-    let status          = user.subscriptionStatus;
-    let planName        = 'GymMate Pro';
-    let amount          = 699;
-    let nextBillingDate = user.currentPeriodEnd;
-    let source          = 'razorpay';
-    let activeProductId = null;
-
-    // Google Play owner subscription overrides when active + not expired.
-    const ownerSub = await OwnerSubscription.findOne({ userId: req.user._id });
-    const ownerActive =
-      ownerSub &&
-      ownerSub.status === 'active' &&
-      ownerSub.expiryTime &&
-      new Date(ownerSub.expiryTime).getTime() > Date.now();
-
-    if (ownerActive) {
-      status          = 'active';
-      planName        = OWNER_PLAN_NAMES[ownerSub.productId] || planName;
-      nextBillingDate = ownerSub.expiryTime;
-      source          = 'google_play';
-      activeProductId = ownerSub.productId;
-    }
 
     res.json({
       status,
