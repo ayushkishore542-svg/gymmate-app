@@ -123,6 +123,8 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://gymmate-app.vercel.app',
   'https://gymmate-app-production.up.railway.app',
+  'https://api.repzy.in',
+  'https://repzy.in',
 ];
 
 // Middleware
