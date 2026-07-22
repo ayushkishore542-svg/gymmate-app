@@ -13,6 +13,10 @@ const refreshTokenSchema = new mongoose.Schema(
     },
     expiresAt: { type: Date, required: true, index: true },
     revokedAt: { type: Date, default: null },
+    // Grace-window rotation: set when this token is rotated into a replacement.
+    // Used to distinguish a legit parallel-refresh race from real token theft.
+    replacedByHash: { type: String, default: null },
+    rotatedAt: { type: Date, default: null },
     userAgent: { type: String, default: '' },
     ip: { type: String, default: '' },
   },
