@@ -11,6 +11,7 @@ const { signAccessToken, verifyAccessToken } = require('../utils/jwtAccess');
 const { issueRefreshToken, rotateRefreshToken, revokeAllForUser } = require('../utils/refreshTokenService');
 const { normalizeIndianE164 } = require('../utils/phoneNormalize');
 const { validatePasswordStrength } = require('../utils/passwordPolicy');
+const { getEffectiveSubStatus } = require('../utils/getEffectiveSubStatus');
 const { logger } = require('../utils/logger');
 
 // Reusable helper — returns 400 if any validation rule failed
@@ -629,7 +630,27 @@ router.get('/me', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.json({ user });
+    const userObj = user.toObject();
+
+    // Merge effective subscription state so Profile doesn't show a stale
+    // legacy "Expired" when an active Google Play OwnerSubscription exists.
+    // Only owners have OwnerSubscription; skip the extra lookup for members.
+    if (user.role === 'owner') {
+      try {
+        const eff = await getEffectiveSubStatus(user._id);
+        if (eff && eff.ownerActive) {
+          // Same field names + types (Date). Only values corrected.
+          userObj.subscriptionStatus  = eff.status;          // 'active'
+          userObj.subscriptionEndDate = eff.nextBillingDate; // OwnerSubscription.expiryTime
+        }
+      } catch (e) {
+        // Never let sub-status lookup break /me (critical boot path).
+        // Fallback: legacy user fields as-is.
+        if (process.env.NODE_ENV !== 'production') console.error('[/me] sub status failed:', e.message);
+      }
+    }
+
+    res.json({ user: userObj });
 
   } catch (error) {
     logger.error('Get me error', { err: error.message });

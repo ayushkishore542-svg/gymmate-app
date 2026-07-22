@@ -34,6 +34,7 @@ const express        = require('express');
 const mongoose       = require('mongoose');
 const cors           = require('cors');
 const path           = require('path');
+const crypto         = require('crypto');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const helmet         = require('helmet');
 const mongoSanitize  = require('express-mongo-sanitize');
@@ -162,9 +163,20 @@ const rateLimitLog = (req, msg) => {
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
+  // apiLimiter mounts on '/api/' BEFORE authMiddleware runs (see line ~246),
+  // so req.user is undefined here. Key by a hash of the Authorization header
+  // (per-user without decoding the JWT), falling back to IP for unauthed reqs.
+  // CGNAT-safe: logged-in users on a shared carrier IP get separate buckets.
+  keyGenerator: (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      return crypto.createHash('sha256').update(authHeader).digest('hex');
+    }
+    return ipKeyGenerator(req, res);
+  },
   skip: (req) =>
     req.originalUrl.startsWith('/api/webhooks') ||
     req.originalUrl === '/api/health',
