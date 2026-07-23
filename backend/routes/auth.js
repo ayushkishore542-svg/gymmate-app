@@ -10,7 +10,7 @@ const authMiddleware = require('../middleware/auth');
 const { signAccessToken, verifyAccessToken } = require('../utils/jwtAccess');
 const { issueRefreshToken, rotateRefreshToken, revokeAllForUser } = require('../utils/refreshTokenService');
 const { normalizeIndianE164 } = require('../utils/phoneNormalize');
-const { validatePasswordStrength } = require('../utils/passwordPolicy');
+const { validatePasswordStrength, isCommonPassword } = require('../utils/passwordPolicy');
 const { getEffectiveSubStatus } = require('../utils/getEffectiveSubStatus');
 const { logger } = require('../utils/logger');
 
@@ -18,7 +18,7 @@ const { logger } = require('../utils/logger');
 const validate = (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    res.status(400).json({ errors: errors.array() });
+    res.status(400).json({ message: errors.array()[0]?.msg || 'Validation failed', errors: errors.array() });
     return false;
   }
   return true;
@@ -60,6 +60,25 @@ const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
   message: { message: 'Too many registration attempts. Please try again in an hour.' },
+});
+
+// Owner-authenticated member creation. Keyed per-owner (IP fallback) so a single
+// owner's bulk onboarding never blocks other owners sharing an IP (Jio CGNAT).
+// Must run AFTER authMiddleware so req.user is populated for the key.
+const memberCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const uid = req.user && req.user._id ? req.user._id.toString() : 'anon';
+    return `${ipKeyGenerator(req, res)}:${uid}`;
+  },
+  handler: (req, res, _next, options) => {
+    logger.warn('rate_limit', { action: 'member_create', ip: req.ip });
+    res.set('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+    res.status(429).json({ message: 'Too many member additions. Please try again later.' });
+  },
 });
 
 // ── GET /api/auth/check-id/:loginId — real-time availability check ───────────
@@ -329,13 +348,14 @@ router.post('/register/owner', registerLimiter, [
 });
 
 // Register Member (by gym owner — must be authenticated as owner)
-router.post('/register/member', registerLimiter, authMiddleware, [
+router.post('/register/member', authMiddleware, memberCreateLimiter, [
   body('name').notEmpty().trim().escape(),
   body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail().trim(),
-  body('password').isLength({ min: 8 }).trim(),
+  // Relaxed policy for owner-created member accounts: min 6, no complexity,
+  // but common/worst-case passwords still blocked. Strict paths keep validatePasswordStrength.
+  body('password').isLength({ min: 6 }).withMessage('Min 6 characters').trim(),
   body('password').custom((v) => {
-    const r = validatePasswordStrength(v);
-    if (!r.ok) throw new Error(r.message);
+    if (isCommonPassword(v)) throw new Error('This password is too common');
     return true;
   }),
   body('loginId').notEmpty().trim(),

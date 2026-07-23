@@ -236,7 +236,8 @@ app.use(morgan('combined', {
 app.use('/api/', apiLimiter);
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth/register/owner', registerLimiter);
-app.use('/api/auth/register/member', registerLimiter);
+// register/member uses a route-level, per-owner memberCreateLimiter (see routes/auth.js).
+// The strict signup limiter here would cap owners at 3 member-adds/hour — removed.
 
 // Middleware references (already required as authMiddleware in routes,
 // but applied globally here for subscriptionGuard)

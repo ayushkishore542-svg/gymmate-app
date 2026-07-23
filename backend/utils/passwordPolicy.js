@@ -28,4 +28,11 @@ function validatePasswordStrength(password) {
   return { ok: true };
 }
 
-module.exports = { validatePasswordStrength, COMMON_PASSWORDS };
+// Blocklist-only check. Used by owner-created member accounts (relaxed policy:
+// no length/complexity beyond min-6, but worst-case passwords still rejected).
+// Does NOT modify validatePasswordStrength — strict paths keep using that.
+function isCommonPassword(password) {
+  return typeof password === 'string' && COMMON_PASSWORDS.has(password.toLowerCase());
+}
+
+module.exports = { validatePasswordStrength, COMMON_PASSWORDS, isCommonPassword };
