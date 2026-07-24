@@ -26,6 +26,11 @@ module.exports = async function subscriptionGuard(req, res, next) {
     // Members are not subject to owner subscription rules
     if (req.user.role !== 'owner') return next();
 
+    // READ-ONLY MODE: an owner's own data stays viewable even when the
+    // subscription has lapsed. Only mutations are gated. GET/HEAD are reads;
+    // OPTIONS is a CORS preflight and never mutates.
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+
     // Merge active Google Play subscription over Razorpay/trial (shared helper).
     const eff = await getEffectiveSubStatus(req.user._id);
     if (!eff) return res.status(404).json({ message: 'Owner not found' });
@@ -50,7 +55,7 @@ module.exports = async function subscriptionGuard(req, res, next) {
       // Trial expired — block
       return res.status(403).json({
         subscriptionRequired: true,
-        message:  'Your free trial has ended. Please set up auto-pay to continue.',
+        message:  'Your free trial has ended. Renew to add or edit data — you can still view your existing records.',
         status:   'trial_expired',
       });
     }
@@ -63,7 +68,7 @@ module.exports = async function subscriptionGuard(req, res, next) {
 
       return res.status(403).json({
         subscriptionRequired: true,
-        message: 'Your subscription has ended. Please resubscribe to continue.',
+        message: 'Your subscription has ended. Renew to add or edit data — you can still view your existing records.',
         status:  'cancelled',
       });
     }
@@ -71,7 +76,7 @@ module.exports = async function subscriptionGuard(req, res, next) {
     // ── Expired / Failed ─────────────────────────────────────────────────
     return res.status(403).json({
       subscriptionRequired: true,
-      message: 'Your subscription is inactive. Please renew to continue.',
+      message: 'Your subscription has expired. Renew to add or edit data — you can still view your existing records.',
       status,
     });
 
